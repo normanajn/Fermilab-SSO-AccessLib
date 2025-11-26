@@ -17,8 +17,10 @@ class FermiSSOKrb5Session( requests.Session ):
                 "pf.adapterId" :"FormBased",
              }
              del kwargs["userpass"]
+         else:
+             self.login_form_data = None
 
-         self.choose_page_re = re.compile('<form.*method="GET".*action="(/idp/[^"]*)">')
+         self.choose_page_re = re.compile('<form.*method="GET".*action="(/idp/[^"]*)".*>')
          self.login_page_re = re.compile('<form.*method="POST".*action="(/idp/[^"]*)".*>')
          self.base_re = re.compile('<base href="(.*)/"/>')
          self.postback_form_re = re.compile('<form.*method="post".*action="([^"]*)".*>.*<input.*name="RelayState" *value="([^"]*)".*<input.*name="SAMLResponse" *value="([^"]*)"',flags=re.S)
@@ -31,6 +33,7 @@ class FermiSSOKrb5Session( requests.Session ):
      def send(self, req, **send_kwargs):
          res = requests.Session.send(self, req, **send_kwargs)
          if self.logging_in_already:
+             # recursively called from a get() or post(), below...
              return res
          m = self.choose_page_re.search(res.text)
          if m:
@@ -39,10 +42,10 @@ class FermiSSOKrb5Session( requests.Session ):
              # got choose_auth page...
              url = self.extract_chose_url(res)
              print(f"trying to choose by calling {url} ")
-             res = requests.Session.get(self, url, auth = HTTPKerberosAuth(mutual_authentication=OPTIONAL,force_preemptive=True))
+             res = requests.Session.get(self, url, auth = HTTPKerberosAuth(mutual_authentication=OPTIONAL,force_preemptive=False))
 
          m = self.login_page_re.search(res.text)
-         while m:
+         while m and self.login_form_data:
              print("got Login page...")
              url = self.extract_login_url(res)
              res = requests.Session.post(self, url, data=self.login_form_data)
@@ -50,8 +53,12 @@ class FermiSSOKrb5Session( requests.Session ):
          m = self.postback_form_re.search(res.text)
          if m:
              print("saw Postback form...")
+             print(res.text)
+             print("=-=-=-=-=-=-=-=")
              url, formdata = self.extract_post_back_data(res)
-             res = requests.Session.post(self,url, data=formdata)
+             h = { 'Content-type': 'application/x-www-form-urlencoded' }
+             res = requests.Session.post(self,url, data=formdata, headers=h)
+         self.logging_in_already = False
          return res
 
      def extract_post_back_data(self, resp): 
