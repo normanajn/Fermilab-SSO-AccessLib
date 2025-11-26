@@ -35,6 +35,7 @@ class FermiSSOKrb5Session( requests.Session ):
          if self.logging_in_already:
              # recursively called from a get() or post(), below...
              return res
+
          m = self.choose_page_re.search(res.text)
          if m:
              self.logging_in_already = True
@@ -45,19 +46,22 @@ class FermiSSOKrb5Session( requests.Session ):
              res = requests.Session.get(self, url, auth = HTTPKerberosAuth(mutual_authentication=OPTIONAL,force_preemptive=False))
 
          m = self.login_page_re.search(res.text)
-         while m and self.login_form_data:
+         if m and self.login_form_data:
              print("got Login page...")
              url = self.extract_login_url(res)
              res = requests.Session.post(self, url, data=self.login_form_data)
              m = self.login_page_re.search(res.text)
+
          m = self.postback_form_re.search(res.text)
          if m:
              print("saw Postback form...")
+             print(f"cookies: {repr(self.cookies)}")
              print(res.text)
              print("=-=-=-=-=-=-=-=")
              url, formdata = self.extract_post_back_data(res)
-             h = { 'Content-type': 'application/x-www-form-urlencoded' }
-             res = requests.Session.post(self,url, data=formdata, headers=h)
+             # h = { 'Content-type': 'application/x-www-form-urlencoded' }
+             res = requests.Session.post(self,url, data=formdata)
+
          self.logging_in_already = False
          return res
 
