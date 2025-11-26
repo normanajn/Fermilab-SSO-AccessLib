@@ -8,38 +8,56 @@ class FermiSSOKrb5Session( requests.Session ):
      def __init__(self, *args, **kwargs):
          if "userpass" in kwargs:
              self.adapterid =  "ad..KrbOrForm"
-             self.username, self.passwd = kwargs["userpass"].split(":")
-             del kwargs["userpass"]
-         requests.Session.__init__(self, *args, **kwargs)
-         self.choose_page_re = re.compile('<form.*method="GET".*action="(/idp/[^"]*)">')
-         self.login_page_re = re.compile('<form.*method="POST".*action="(/idp/[^"]*)".*>')
-         self.base_re = re.compile('<base href="(.*)/"/>')
-         # default to kerberos
-         self.adapterid =  "ad..KrbOrForm"
-
-     def send(self, req, **send_kwargs):
-         res = requests.Session.send(self, req, **send_kwargs)
-         m = self.choose_page_re.search(res.text)
-         if m:
-             print("got Choose page...")
-             # got choose_auth page...
-             url = self.extract_chose_url(res)
-             print(f"trying to choose by calling {url} ")
-             res = self.get(url, auth = HTTPKerberosAuth(mutual_authentication=OPTIONAL,force_preemptive=True))
-
-         m = self.login_page_re.search(res.text)
-         if m:
-             print("got Login page...")
-             url = self.extract_login_url(res)
-             formdata = {
-                "pf.username" : self.username,
-                "pf.pass": self.passwd, 
+             username, passwd = kwargs["userpass"].split(":")
+             self.login_form_data = {
+                "pf.username" : username,
+                "pf.pass": passwd, 
                 "pf.ok" : "clicked",
                 "pf.cancel" :"",
                 "pf.adapterId" :"FormBased",
              }
-             res = self.post(url, data=formdata)
+             del kwargs["userpass"]
+
+         self.choose_page_re = re.compile('<form.*method="GET".*action="(/idp/[^"]*)">')
+         self.login_page_re = re.compile('<form.*method="POST".*action="(/idp/[^"]*)".*>')
+         self.base_re = re.compile('<base href="(.*)/"/>')
+         self.postback_form_re = re.compile('<form.*method="post".*action="([^"]*)".*>.*<input.*name="RelayState" *value="([^"]*)".*<input.*name="SAMLResponse" *value="([^"]*)"',flags=re.S)
+         self.adapterid =  "ad..KrbOrForm"
+         self.logging_in_already = False
+
+         requests.Session.__init__(self, *args, **kwargs)
+
+
+     def send(self, req, **send_kwargs):
+         res = requests.Session.send(self, req, **send_kwargs)
+         if self.logging_in_already:
+             return res
+         m = self.choose_page_re.search(res.text)
+         if m:
+             self.logging_in_already = True
+             print("got Choose page...")
+             # got choose_auth page...
+             url = self.extract_chose_url(res)
+             print(f"trying to choose by calling {url} ")
+             res = requests.Session.get(self, url, auth = HTTPKerberosAuth(mutual_authentication=OPTIONAL,force_preemptive=True))
+
+         m = self.login_page_re.search(res.text)
+         while m:
+             print("got Login page...")
+             url = self.extract_login_url(res)
+             res = requests.Session.post(self, url, data=self.login_form_data)
+             m = self.login_page_re.search(res.text)
+         m = self.postback_form_re.search(res.text)
+         if m:
+             print("saw Postback form...")
+             url, formdata = self.extract_post_back_data(res)
+             res = requests.Session.post(self,url, data=formdata)
          return res
+
+     def extract_post_back_data(self, resp): 
+      
+         m = self.postback_form_re.search(resp.text)
+         return m.group(1), { "RelayState": m .group(2), "SAMLResponse": m.group(3)}
         
      def extract_login_url(self, resp):
          base = "https://pingprod.fnal.gov"
