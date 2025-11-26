@@ -1,13 +1,13 @@
 import requests
-from requests_kerberos import HTTPKerberosAuth, OPTIONAL, REQUIRED
+from requests_kerberos import HTTPKerberosAuth, OPTIONAL, REQUIRED, DISABLED
 import re
 import sys
 import time
 
 class FermiSSOKrb5Session( requests.Session ):
      def __init__(self, *args, **kwargs):
+         self.adapterid =  "ad..KrbOrForm"
          if "userpass" in kwargs:
-             self.adapterid =  "ad..KrbOrForm"
              username, passwd = kwargs["userpass"].split(":")
              self.login_form_data = {
                 "pf.username" : username,
@@ -43,7 +43,9 @@ class FermiSSOKrb5Session( requests.Session ):
              # got choose_auth page...
              url = self.extract_chose_url(res)
              print(f"trying to choose by calling {url} ")
-             res = requests.Session.get(self, url, auth = HTTPKerberosAuth(mutual_authentication=OPTIONAL,force_preemptive=False))
+             res = requests.Session.get(self, url, auth = HTTPKerberosAuth(mutual_authentication=DISABLED,force_preemptive=False))
+             for resp in res.history:
+                 print ("history_item:",  resp.status_code, ": ", resp.text)
 
          m = self.login_page_re.search(res.text)
          if m and self.login_form_data:
@@ -59,7 +61,6 @@ class FermiSSOKrb5Session( requests.Session ):
              print(res.text)
              print("=-=-=-=-=-=-=-=")
              url, formdata = self.extract_post_back_data(res)
-             # h = { 'Content-type': 'application/x-www-form-urlencoded' }
              res = requests.Session.post(self,url, data=formdata)
 
          self.logging_in_already = False

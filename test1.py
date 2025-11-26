@@ -15,7 +15,7 @@ requests_log.propagate = True
 # =-=-=-=-=-=-=-=
 
 s = FermiSSOKrb5Session()
-r = s.get("https://pomsgpvm02.fnal.gov/poms/index/hypot/production")
+r = s.get("https://cdcvs.fnal.gov/index.html")
 
 if r.text.find("Marc Mengel") > 0:
    print("yay!")
