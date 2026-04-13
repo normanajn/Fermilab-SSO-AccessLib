@@ -1,5 +1,5 @@
 
-== Fermi SSO signon for Scripts ==
+## Fermi SSO signon for Scripts
 
 This is a plugin for the Python requests library that will let scripts sign into Fermilab SSO with a user name and password.
 
