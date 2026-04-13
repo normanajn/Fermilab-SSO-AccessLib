@@ -1,5 +1,5 @@
 import requests
-from requests_fermi_sso_krb5 import FermiSSOKrb5Session
+from requests_fermi_sso import FermiSSOSession
 # =-=-=- debug logging =-=-=-=-=
 import http
 import logging

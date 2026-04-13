@@ -1,5 +1,5 @@
 import requests, os, sys
-from requests_fermi_sso_krb5 import FermiSSOKrb5Session
+from requests_fermi_sso import FermiSSOSession
 # =-=-=- debug logging =-=-=-=-=
 import http
 import logging
@@ -12,12 +12,14 @@ logging.getLogger().setLevel(logging.DEBUG)
 requests_log = logging.getLogger("requests.packages.urllib3")
 requests_log.setLevel(logging.DEBUG)
 requests_log.propagate = True
+rfs_log = logging.getLogger("requests_fermi_sso")
+rfs_log.setLevel(logging.DEBUG)
 # =-=-=-=-=-=-=-=
 
 print(f"{os.environ['USER']}passwd:", end="")
 sys.stdout.flush()
 passtxt = sys.stdin.readline().strip("\n")
-s = FermiSSOKrb5Session(userpass=f"{os.environ['USER']}:{passtxt}")
+s = FermiSSOSession(userpass=f"{os.environ['USER']}:{passtxt}")
 r = s.get("https://cdcvs.fnal.gov/index.html")
 
 print("got: ")

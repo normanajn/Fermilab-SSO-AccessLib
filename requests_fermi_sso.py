@@ -1,12 +1,13 @@
 import requests
-from requests_kerberos import HTTPKerberosAuth, OPTIONAL, REQUIRED, DISABLED
+
 import re
 import sys
 import time
+import logging
+logger = logging.getLogger(__name__)
 
-class FermiSSOKrb5Session( requests.Session ):
+class FermiSSOSession( requests.Session ):
      def __init__(self, *args, **kwargs):
-         self.adapterid =  "ad..KrbOrForm"
          if "userpass" in kwargs:
              username, passwd = kwargs["userpass"].split(":")
              self.login_form_data = {
@@ -24,7 +25,7 @@ class FermiSSOKrb5Session( requests.Session ):
          self.login_page_re = re.compile('<form.*method="POST".*action="(/idp/[^"]*)".*>')
          self.base_re = re.compile('<base href="(.*)/"/>')
          self.postback_form_re = re.compile('<form.*method="post".*action="([^"]*)".*>.*<input.*name="RelayState" *value="([^"]*)".*<input.*name="SAMLResponse" *value="([^"]*)"',flags=re.S)
-         self.adapterid =  "ad..KrbOrForm"
+         self.adapterid =  "ad..FormBased"
          self.logging_in_already = False
 
          requests.Session.__init__(self, *args, **kwargs)
@@ -32,6 +33,7 @@ class FermiSSOKrb5Session( requests.Session ):
 
      def send(self, req, **send_kwargs):
          res = requests.Session.send(self, req, **send_kwargs)
+         logger.debug(f"returning {res=}")
          if self.logging_in_already:
              # recursively called from a get() or post(), below...
              return res
@@ -39,27 +41,27 @@ class FermiSSOKrb5Session( requests.Session ):
          m = self.choose_page_re.search(res.text)
          if m:
              self.logging_in_already = True
-             print("got Choose page...")
+             ("got Choose page...")
              # got choose_auth page...
              url = self.extract_chose_url(res)
-             print(f"trying to choose by calling {url} ")
-             res = requests.Session.get(self, url, auth = HTTPKerberosAuth(mutual_authentication=DISABLED,force_preemptive=False))
+             logger.debug(f"trying to choose by calling {url} ")
+             res = requests.Session.get(self, url)
              for resp in res.history:
-                 print ("history_item:",  resp.status_code, ": ", resp.text)
+                 logger.debug(f"history_item:{resp.status_code}: {resp.text}")
 
          m = self.login_page_re.search(res.text)
          if m and self.login_form_data:
-             print("got Login page...")
+             logger.debug("got Login page...")
              url = self.extract_login_url(res)
              res = requests.Session.post(self, url, data=self.login_form_data)
              m = self.login_page_re.search(res.text)
 
          m = self.postback_form_re.search(res.text)
          if m:
-             print("saw Postback form...")
-             print(f"cookies: {repr(self.cookies)}")
-             print(res.text)
-             print("=-=-=-=-=-=-=-=")
+             logger.debug("saw Postback form...")
+             logger.debug(f"cookies: {repr(self.cookies)}")
+             logger.debug(res.text)
+             logger.debug("=-=-=-=-=-=-=-=")
              url, formdata = self.extract_post_back_data(res)
              res = requests.Session.post(self,url, data=formdata)
 
