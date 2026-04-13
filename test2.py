@@ -1,20 +1,24 @@
 import requests, os, sys
 from requests_fermi_sso import FermiSSOSession
-# =-=-=- debug logging =-=-=-=-=
-import http
-import logging
-import requests
 
-http.client.HTTPConnection.debuglevel = 1
 
-logging.basicConfig()
-logging.getLogger().setLevel(logging.DEBUG)
-requests_log = logging.getLogger("requests.packages.urllib3")
-requests_log.setLevel(logging.DEBUG)
-requests_log.propagate = True
-rfs_log = logging.getLogger("requests_fermi_sso")
-rfs_log.setLevel(logging.DEBUG)
-# =-=-=-=-=-=-=-=
+debug=True
+if debug:
+    # =-=-=- debug logging =-=-=-=-=
+    import http
+    import logging
+    import requests
+
+    http.client.HTTPConnection.debuglevel = 1
+
+    logging.basicConfig()
+    logging.getLogger().setLevel(logging.DEBUG)
+    requests_log = logging.getLogger("requests.packages.urllib3")
+    requests_log.setLevel(logging.DEBUG)
+    requests_log.propagate = True
+    rfs_log = logging.getLogger("requests_fermi_sso")
+    rfs_log.setLevel(logging.DEBUG)
+    # =-=-=-=-=-=-=-=
 
 print(f"{os.environ['USER']}passwd:", end="")
 sys.stdout.flush()
