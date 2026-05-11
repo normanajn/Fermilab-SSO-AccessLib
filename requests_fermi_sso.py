@@ -74,7 +74,7 @@ class FermiSSOSession( requests.Session ):
          return m.group(1), { "RelayState": m .group(2), "SAMLResponse": m.group(3)}
         
      def extract_login_url(self, resp):
-         base = "https://pingprod.fnal.gov"
+         base = resp.url[0:resp.url.find("/",9)]
          mb = self.base_re.search(resp.text)
          if mb:
               base = mb.group(1)
@@ -84,11 +84,10 @@ class FermiSSOSession( requests.Session ):
      def extract_chose_url(self, resp):
          # form data to send to the Pick Authentication Method form
          formdata = {
-            "pfidpadapterid": self.adapterid,    # we want kerberos
+            "pfidpadapterid": self.adapterid,    # we want password
             "rememberChoice": "true",            # don't re-ask
          }
-         # should find this from the response somewhere, but..
-         base = "https://pingprod.fnal.gov"
+         base = resp.url[0:resp.url.find("/",9)]
          mb = self.base_re.search(resp.text)
          if mb:
               base = mb.group(1)

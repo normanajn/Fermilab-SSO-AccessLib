@@ -1,7 +1,6 @@
 import requests, os, sys
 from requests_fermi_sso import FermiSSOSession
 
-
 debug=True
 if debug:
     # =-=-=- debug logging =-=-=-=-=
@@ -20,9 +19,11 @@ if debug:
     rfs_log.setLevel(logging.DEBUG)
     # =-=-=-=-=-=-=-=
 
-print(f"{os.environ['USER']}passwd:", end="")
+os.system("stty -echo")
+print(f"{os.environ['USER']} passwd: ", end="")
 sys.stdout.flush()
 passtxt = sys.stdin.readline().strip("\n")
+os.system("stty echo")
 s = FermiSSOSession(userpass=f"{os.environ['USER']}:{passtxt}")
 r = s.get("https://cdcvs.fnal.gov/index.html")
 
