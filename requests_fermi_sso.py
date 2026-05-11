@@ -4,96 +4,124 @@ import re
 import sys
 import time
 import logging
+
 logger = logging.getLogger(__name__)
 
-class FermiSSOSession( requests.Session ):
-     def __init__(self, *args, **kwargs):
-         if "userpass" in kwargs:
-             username, passwd = kwargs["userpass"].split(":")
-             self.login_form_data = {
-                "pf.username" : username,
-                "pf.pass": passwd, 
-                "pf.ok" : "clicked",
-                "pf.cancel" :"",
-                "pf.adapterId" :"FormBased",
-             }
-             del kwargs["userpass"]
-         else:
-             self.login_form_data = None
 
-         self.choose_page_re = re.compile('<form.*method="GET".*action="(/idp/[^"]*)".*>')
-         self.login_page_re = re.compile('<form.*method="POST".*action="(/idp/[^"]*)".*>')
-         self.base_re = re.compile('<base href="(.*)/"/>')
-         self.postback_form_re = re.compile('<form.*method="post".*action="([^"]*)".*>.*<input.*name="RelayState" *value="([^"]*)".*<input.*name="SAMLResponse" *value="([^"]*)"',flags=re.S)
-         self.adapterid =  "ad..FormBased"
-         self.logging_in_already = False
+class FermiSSOSession(requests.Session):
+    """
+    Subclass of requests.Session that logs into Fermi SSO
+    as needed.
+    >>> import requests
+    >>> from requests_fermi_sso import FermiSSOSession
+    >>> s = FermiSSOSession(userpass=f"{username?:{password}")
+    >>> resp = s.get("https://cdcvs.fnal.gov/index.html")
+    """
 
-         requests.Session.__init__(self, *args, **kwargs)
+    def __init__(self, *args, **kwargs):
+        """
+        set login form data, various page recognition regexps,
+        initialize logging_in_already flag to prevent halls of mirrors
+        and do superclass init
+        """
 
+        if "userpass" in kwargs:
+            username, passwd = kwargs["userpass"].split(":")
+            self.login_form_data = {
+                "pf.username": username,
+                "pf.pass": passwd,
+                "pf.ok": "clicked",
+                "pf.cancel": "",
+                "pf.adapterId": "FormBased",
+            }
+            del kwargs["userpass"]
+        else:
+            self.login_form_data = None
 
-     def send(self, req, **send_kwargs):
-         res = requests.Session.send(self, req, **send_kwargs)
-         logger.debug(f"returning {res=}")
-         if self.logging_in_already:
-             # recursively called from a get() or post(), below...
-             return res
+        self.choose_page_re = re.compile('<form.*method="GET".*action="(/idp/[^"]*)".*>')
+        self.login_page_re = re.compile('<form.*method="POST".*action="(/idp/[^"]*)".*>')
+        self.base_re = re.compile('<base href="(.*)/"/>')
+        self.postback_form_re = re.compile(
+            '<form.*method="post".*action="([^"]*)".*>.*<input.*name="RelayState" *value="([^"]*)".*<input.*name="SAMLResponse" *value="([^"]*)"',
+            flags=re.S,
+        )
+        self.adapterid = "ad..FormBased"
+        self.logging_in_already = False
 
-         m = self.choose_page_re.search(res.text)
-         if m:
-             self.logging_in_already = True
-             ("got Choose page...")
-             # got choose_auth page...
-             url = self.extract_chose_url(res)
-             logger.debug(f"trying to choose by calling {url} ")
-             res = requests.Session.get(self, url)
-             for resp in res.history:
-                 logger.debug(f"history_item:{resp.status_code}: {resp.text}")
+        requests.Session.__init__(self, *args, **kwargs)
 
-         m = self.login_page_re.search(res.text)
-         if m and self.login_form_data:
-             logger.debug("got Login page...")
-             url = self.extract_login_url(res)
-             res = requests.Session.post(self, url, data=self.login_form_data)
-             m = self.login_page_re.search(res.text)
+    def send(self, req, **send_kwargs):
+        """
+        This is what is actually different from plain Session;
+        we do the Session send(), but before returning the data
+        check for various pages in the SSO login sequence, and
+        send them appropriate responses
+        """
+        res = requests.Session.send(self, req, **send_kwargs)
+        logger.debug(f"returning {res=}")
+        if self.logging_in_already:
+            # recursively called from a get() or post(), below...
+            return res
 
-         m = self.postback_form_re.search(res.text)
-         if m:
-             logger.debug("saw Postback form...")
-             logger.debug(f"cookies: {repr(self.cookies)}")
-             logger.debug(res.text)
-             logger.debug("=-=-=-=-=-=-=-=")
-             url, formdata = self.extract_post_back_data(res)
-             res = requests.Session.post(self,url, data=formdata)
+        m = self.choose_page_re.search(res.text)
+        if m:
+            self.logging_in_already = True
+            ("got Choose page...")
+            # got choose_auth page...
+            url = self.extract_chose_url(res)
+            logger.debug(f"trying to choose by calling {url} ")
+            res = requests.Session.get(self, url)
+            for resp in res.history:
+                logger.debug(f"history_item:{resp.status_code}: {resp.text}")
 
-         self.logging_in_already = False
-         return res
+        m = self.login_page_re.search(res.text)
+        if m and self.login_form_data:
+            logger.debug("got Login page...")
+            url = self.extract_login_url(res)
+            res = requests.Session.post(self, url, data=self.login_form_data)
+            m = self.login_page_re.search(res.text)
 
-     def extract_post_back_data(self, resp): 
-      
-         m = self.postback_form_re.search(resp.text)
-         return m.group(1), { "RelayState": m .group(2), "SAMLResponse": m.group(3)}
-        
-     def extract_login_url(self, resp):
-         base = resp.url[0:resp.url.find("/",9)]
-         mb = self.base_re.search(resp.text)
-         if mb:
-              base = mb.group(1)
-         m = self.login_page_re.search(resp.text)
-         return base + m.group(1)
+        m = self.postback_form_re.search(res.text)
+        if m:
+            logger.debug("saw Postback form...")
+            logger.debug(f"cookies: {repr(self.cookies)}")
+            logger.debug(res.text)
+            logger.debug("=-=-=-=-=-=-=-=")
+            url, formdata = self.extract_post_back_data(res)
+            res = requests.Session.post(self, url, data=formdata)
 
-     def extract_chose_url(self, resp):
-         # form data to send to the Pick Authentication Method form
-         formdata = {
-            "pfidpadapterid": self.adapterid,    # we want password
-            "rememberChoice": "true",            # don't re-ask
-         }
-         base = resp.url[0:resp.url.find("/",9)]
-         mb = self.base_re.search(resp.text)
-         if mb:
-              base = mb.group(1)
-          
-         packed_form_data = "&".join([ f"{k}={v}" for k,v in formdata.items()])
-         # use a regexp to find the <form> tag in the page
-         m = self.choose_page_re.search(resp.text)
-         assert(m)
-         return base + m.group(1) + "?" + packed_form_data
+        self.logging_in_already = False
+        return res
+
+    def extract_post_back_data(self, resp):
+        """utiltity to regex match the data for the postback form"""
+
+        m = self.postback_form_re.search(resp.text)
+        return m.group(1), {"RelayState": m.group(2), "SAMLResponse": m.group(3)}
+
+    def extract_login_url(self, resp):
+        """utility to regex match and expand the login form url"""
+        base = resp.url[0 : resp.url.find("/", 9)]
+        mb = self.base_re.search(resp.text)
+        if mb:
+            base = mb.group(1)
+        m = self.login_page_re.search(resp.text)
+        return base + m.group(1)
+
+    def extract_chose_url(self, resp):
+        """return form data to send to the Pick Authentication Method form"""
+
+        formdata = {
+            "pfidpadapterid": self.adapterid,  # we want password
+            "rememberChoice": "true",  # don't re-ask
+        }
+        base = resp.url[0 : resp.url.find("/", 9)]
+        mb = self.base_re.search(resp.text)
+        if mb:
+            base = mb.group(1)
+
+        packed_form_data = "&".join([f"{k}={v}" for k, v in formdata.items()])
+        # use a regexp to find the <form> tag in the page
+        m = self.choose_page_re.search(resp.text)
+        assert m
+        return base + m.group(1) + "?" + packed_form_data
