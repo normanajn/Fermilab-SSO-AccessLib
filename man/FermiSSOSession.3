@@ -1,0 +1,185 @@
+.TH FERMISSOSESSION 3 "2026-08-18" "requests-fermi-sso 0.1.0" "Python Library"
+.SH NAME
+FermiSSOSession \- requests.Session subclass that logs into Fermilab SSO
+.SH SYNOPSIS
+.EX
+.B from requests_fermi_sso import FermiSSOSession
+.sp
+.BI "s = FermiSSOSession(userpass=f\(dq{" user } : { pass }\(dq)
+.BI "r = s.get(\(dq" URL \(dq)
+.EE
+.SH DESCRIPTION
+.B FermiSSOSession
+subclasses
+.B requests.Session
+and overrides
+.BR send() .
+Every response is inspected before it is handed back; if it looks like a
+stage of the Fermilab PingFederate single sign\-on sequence, the session
+answers it and continues, so the caller receives the protected page rather
+than the login machinery.
+.PP
+Callers use it exactly like a normal
+.BR requests.Session .
+There is no explicit login call, and no state to manage beyond keeping the
+session object alive.
+.SS Flow
+The overridden
+.B send()
+recognizes and answers three pages, in order:
+.TP
+.B Choose\-authentication page
+A form with
+.B method="GET"
+and an action under
+.IR /idp/ .
+The session re\-requests it with
+.B pfidpadapterid=ad..FormBased
+and
+.BR rememberChoice=true ,
+selecting password authentication.
+.TP
+.B Login page
+A form with
+.B method="POST"
+and an action under
+.IR /idp/ .
+The session posts
+.BR pf.username ,
+.BR pf.pass ,
+.BR pf.ok ,
+.BR pf.cancel ,
+and
+.BR pf.adapterId .
+This step is skipped when the session was constructed without
+.BR userpass .
+.TP
+.B SAML postback form
+An auto\-submitting form carrying
+.B RelayState
+and
+.BR SAMLResponse .
+The session posts it to the service provider, which sets the application
+session cookie.
+.PP
+A
+.B logging_in_already
+flag suppresses this handling for the nested requests the session issues
+itself, preventing unbounded recursion. It is cleared before
+.B send()
+returns.
+.SH CONSTRUCTOR
+.TP
+.BI FermiSSOSession( "\fR...\fP" ", userpass=" STRING )
+All arguments are passed to
+.BR requests.Session .
+The
+.B userpass
+keyword, if present, is consumed and split on
+.RB \(dq : \(dq
+into a username and password.
+.PP
+Without
+.BR userpass ,
+the session still selects an authentication method and submits postback
+forms, but never fills in the login form. This is useful for inspecting the
+flow without credentials.
+.SH ATTRIBUTES
+.TP
+.B login_form_data
+The dict posted to the login form, or
+.B None
+when no
+.B userpass
+was given.
+.TP
+.B choose_page_re
+.TQ
+.B login_page_re
+.TQ
+.B postback_form_re
+.TQ
+.B base_re
+Compiled patterns used to recognize each page. Exposed so callers can test
+a response themselves, which is how
+.BR fermi_sso_probe (1)
+distinguishes a failed login from a successful one.
+.TP
+.B adapterid
+The identity provider adapter to select. Defaults to
+.BR ad..FormBased .
+.TP
+.B logging_in_already
+Recursion guard; true only while a login sequence is in progress.
+.SH METHODS
+Beyond the inherited
+.B requests.Session
+interface:
+.TP
+.BI send( request ", " **kwargs )
+Overridden. Performs the request, then advances the login flow if needed.
+.TP
+.BI extract_login_url( response )
+Absolute URL of the login form, honoring any
+.B <base>
+tag.
+.TP
+.BI extract_chose_url( response )
+Absolute URL that selects password authentication, query string included.
+.TP
+.BI extract_post_back_data( response )
+Returns
+.RI ( url ", " formdata )
+for the SAML postback form.
+.SH RETURN VALUE
+.B send()
+returns a
+.B requests.Response
+for the final page of the sequence.
+.SH ERRORS
+A failed login is
+.B not
+signalled by an exception or a non\-2xx status. The identity provider
+re\-serves its login page with status 200, so the response looks ordinary.
+Callers must inspect the body; see
+.BR fermi_sso_probe (1),
+which implements that check.
+.PP
+A
+.B userpass
+value containing more than one colon raises
+.B ValueError
+from the constructor, because the password cannot be told from the
+delimiter.
+.SH EXAMPLES
+Fetch a protected page:
+.PP
+.RS
+.EX
+from requests_fermi_sso import FermiSSOSession
+
+s = FermiSSOSession(userpass="myaccount:mypassword")
+r = s.get("https://mu2e\-docdb.fnal.gov/cgi\-bin/sso/DocumentDatabase")
+if s.login_page_re.search(r.text):
+    raise SystemExit("login failed")
+print(r.text)
+.EE
+.RE
+.PP
+Cookies persist on the session, so later requests to the same service
+provider skip the login round trip entirely.
+.SH LIMITATIONS
+Only the
+.B ad..FormBased
+password adapter is driven; accounts requiring multi\-factor authentication
+cannot complete the flow. Page recognition is regular\-expression based and
+will break if the identity provider changes its markup. The session holds
+per\-login state and must not be shared across threads.
+.SH SEE ALSO
+.BR fermi_sso_probe (1)
+.PP
+Project documentation:
+.I docs/HOWTO.md
+in the source distribution.
+.SH AUTHOR
+Marc Mengel <mengel@fnal.gov>.

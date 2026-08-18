@@ -12,10 +12,11 @@ def wrap_find_packages(*args, **kwargs):
 long_description = (here / "README.md").read_text(encoding="utf-8")
 setup(
     name = "requests-fermi_sso",
-    py_modules=["requests_fermi_sso"],
-    version = "0.0.1",
+    py_modules=["requests_fermi_sso", "fermi_sso_probe"],
+    version = "0.1.0",
+    long_description=long_description,
     long_description_content_type="text/markdown",
-    author= "Marc Mengel", 
+    author= "Marc Mengel",
     author_email="mengel@fnal.gov",
     classifiers = [
       "Development Status :: 3 - Alpha",
@@ -25,4 +26,12 @@ setup(
     ],
     python_requires=">=3.6",
     install_requires=["requests"],
+    extras_require={"test": ["pytest"]},
+    entry_points={
+        "console_scripts": ["fermi-sso-probe=fermi_sso_probe:main"],
+    },
+    data_files=[
+        ("share/man/man1", ["man/fermi_sso_probe.1"]),
+        ("share/man/man3", ["man/FermiSSOSession.3"]),
+    ],
 )

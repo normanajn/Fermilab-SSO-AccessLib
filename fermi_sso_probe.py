@@ -1,71 +1,322 @@
 #!/usr/bin/env python3
 """
-fermi_sso_probe -- diagnostic helper for requests_fermi_sso.
+fermi_sso_probe -- fetch an SSO-protected Fermilab URL and report whether
+the login actually worked.
 
-Fetches an SSO-protected Fermilab URL using FermiSSOSession and reports
-whether the login actually succeeded, since FermiSSOSession returns the
-login page with a 200 status on bad credentials rather than raising.
+FermiSSOSession returns the login page with HTTP 200 when credentials fail,
+so a status check alone cannot distinguish success from failure. This tool
+fetches a URL through the session and reports success only when the final
+response has left the identity provider and no longer looks like any stage
+of the login sequence.
 
-Option priority: commandline > environment > default.
+Settings resolve in this order, highest priority first:
 
-  --user      / $FERMI_USER  (default: $USER)
-  --url       / $FERMI_SSO_URL
-  --password-env NAME        read password from that env var instead of prompting
-  --debug     / $FERMI_SSO_DEBUG=1
+    1. commandline options
+    2. environment variables
+    3. a .env file
+    4. built-in defaults
+
+See fermi_sso_probe(1) and docs/HOWTO.md.
 """
 
 import argparse
 import getpass
 import os
+import stat
 import sys
+from typing import Dict, List, Optional, Tuple
 
 from requests_fermi_sso import FermiSSOSession
 
+__version__ = "0.1.0"
+
+#: Fetched when no URL is given. The Mu2e DocDB SSO entry point; note that
+#: https://mu2e-docdb.fnal.gov/ itself is an unprotected landing page and
+#: will not exercise the login flow at all.
 DEFAULT_URL = "https://mu2e-docdb.fnal.gov/cgi-bin/sso/DocumentDatabase"
 
-# If the response still looks like any of these, we never got through.
-IDP_HOST = "pingprod.fnal.gov"
+#: Landing on this host means we never made it back to the service provider.
+DEFAULT_IDP_HOST = "pingprod.fnal.gov"
+
+#: Searched in order when --env-file is not given.
+DEFAULT_ENV_FILES = (".env", "~/.fermi_sso.env")
+
+ENV_USER = "FERMI_USER"
+ENV_PASSWORD = "FERMI_PASSWORD"
+ENV_URL = "FERMI_SSO_URL"
+ENV_IDP_HOST = "FERMI_SSO_IDP_HOST"
+ENV_DEBUG = "FERMI_SSO_DEBUG"
+ENV_ENV_FILE = "FERMI_SSO_ENV_FILE"
 
 
-def parse_args(argv=None):
-    p = argparse.ArgumentParser(
+# --------------------------------------------------------------------------
+# .env file handling
+# --------------------------------------------------------------------------
+
+
+def parse_env_file(text: str) -> Dict[str, str]:
+    """
+    Parse .env-style ``KEY=value`` text into a dict.
+
+    Understands blank lines, ``#`` comments, an optional ``export`` prefix,
+    and single- or double-quoted values (quotes are stripped; a quoted value
+    may contain ``#`` and leading/trailing spaces). Unquoted values have
+    surrounding whitespace and trailing inline comments removed.
+
+    Deliberately small: this avoids a python-dotenv dependency for what is
+    otherwise a stdlib-only package.
+    """
+    values: Dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].lstrip()
+        key, sep, value = line.partition("=")
+        if not sep:
+            continue
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        else:
+            # strip an inline comment only on unquoted values
+            hash_at = value.find(" #")
+            if hash_at != -1:
+                value = value[:hash_at].rstrip()
+        values[key] = value
+    return values
+
+
+def find_env_file(explicit: Optional[str], environ: Optional[Dict[str, str]] = None):
+    """
+    Return the path of the .env file to use, or None.
+
+    An explicit path (from --env-file or $FERMI_SSO_ENV_FILE) is returned even
+    if missing, so the caller can report the error rather than silently
+    falling back. Otherwise DEFAULT_ENV_FILES are probed in order.
+    """
+    environ = os.environ if environ is None else environ
+    candidate = explicit or environ.get(ENV_ENV_FILE)
+    if candidate:
+        return os.path.expanduser(candidate)
+    for name in DEFAULT_ENV_FILES:
+        path = os.path.expanduser(name)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def load_env_file(path: Optional[str], warn=None) -> Dict[str, str]:
+    """
+    Read and parse an env file. Returns {} when path is None or unreadable.
+
+    Warns when the file is group- or world-readable, since it holds a
+    password.
+    """
+    if not path:
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError as exc:
+        if warn:
+            warn(f"warning: cannot read env file {path}: {exc}")
+        return {}
+    if warn:
+        try:
+            mode = os.stat(path).st_mode
+            if mode & (stat.S_IRGRP | stat.S_IROTH):
+                warn(
+                    f"warning: {path} is readable by group/other "
+                    f"({stat.filemode(mode)}); chmod 600 it"
+                )
+        except OSError:
+            pass
+    return parse_env_file(text)
+
+
+# --------------------------------------------------------------------------
+# settings resolution
+# --------------------------------------------------------------------------
+
+
+def resolve(
+    cli_value: Optional[str],
+    env_key: str,
+    environ: Dict[str, str],
+    dotenv: Dict[str, str],
+    default: Optional[str] = None,
+) -> Optional[str]:
+    """Apply the commandline > environment > .env file > default precedence."""
+    if cli_value is not None:
+        return cli_value
+    if environ.get(env_key):
+        return environ[env_key]
+    if dotenv.get(env_key):
+        return dotenv[env_key]
+    return default
+
+
+def resolve_password(
+    args,
+    environ: Dict[str, str],
+    dotenv: Dict[str, str],
+    prompt=None,
+) -> Optional[str]:
+    """
+    Resolve the password across all supported sources.
+
+    --password beats --password-env beats $FERMI_PASSWORD beats the .env
+    file. If none supplied and a prompt callable is given, prompt for it.
+    """
+    if args.password is not None:
+        return args.password
+    if args.password_env:
+        value = environ.get(args.password_env)
+        if not value:
+            raise ValueError(f"${args.password_env} is unset or empty")
+        return value
+    if environ.get(ENV_PASSWORD):
+        return environ[ENV_PASSWORD]
+    if dotenv.get(ENV_PASSWORD):
+        return dotenv[ENV_PASSWORD]
+    if prompt is not None:
+        return prompt()
+    return None
+
+
+# --------------------------------------------------------------------------
+# result classification
+# --------------------------------------------------------------------------
+
+
+def classify(
+    session: FermiSSOSession,
+    resp,
+    idp_host: str,
+    expect: Optional[str] = None,
+) -> Tuple[bool, List[str]]:
+    """
+    Decide whether a response represents a completed login.
+
+    Returns (ok, reasons). Success requires that the final URL is off the
+    IdP host, that neither the choose-auth nor the login form regex still
+    matches, and that --expect text (if given) is present.
+    """
+    reasons: List[str] = []
+
+    if session.choose_page_re.search(resp.text):
+        reasons.append("still on the choose-authentication page")
+    if session.login_page_re.search(resp.text):
+        reasons.append(
+            "still on the login form -- wrong password, or the account "
+            "requires MFA (this package only drives password auth)"
+        )
+    if session.postback_form_re.search(resp.text):
+        reasons.append("stopped on the SAML postback form; it was not submitted")
+    if idp_host and idp_host in resp.url and not reasons:
+        reasons.append(f"stranded on {idp_host} at an unrecognized page")
+    if expect and expect not in resp.text:
+        reasons.append(f"expected text {expect!r} not found in the response body")
+
+    return (not reasons), reasons
+
+
+# --------------------------------------------------------------------------
+# commandline
+# --------------------------------------------------------------------------
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
         prog="fermi_sso_probe",
-        description="Test a Fermilab SSO login through requests_fermi_sso.",
+        description="Fetch an SSO-protected Fermilab URL and report whether "
+        "the login succeeded.",
+        epilog="Settings resolve as: commandline > environment > .env file > "
+        "defaults. See fermi_sso_probe(1).",
     )
-    p.add_argument(
+    parser.add_argument(
+        "url",
+        nargs="?",
+        default=None,
+        help=f"URL to fetch (default: {DEFAULT_URL})",
+    )
+    parser.add_argument(
+        "-U", "--url", dest="url_opt", default=None, help="same as the positional URL"
+    )
+    parser.add_argument(
         "-u",
         "--user",
-        default=os.environ.get("FERMI_USER", os.environ.get("USER", "")),
-        help="Fermilab services account name (default: $FERMI_USER, then $USER)",
+        default=None,
+        help=f"services account name (${ENV_USER}, then $USER)",
     )
-    p.add_argument(
-        "-U",
-        "--url",
-        default=os.environ.get("FERMI_SSO_URL", DEFAULT_URL),
-        help=f"SSO-protected URL to fetch (default: {DEFAULT_URL})",
+    parser.add_argument(
+        "-p",
+        "--password",
+        default=None,
+        help="password. WARNING: visible to other users in ps(1); prefer "
+        "--password-env, a .env file, or the interactive prompt",
     )
-    p.add_argument(
+    parser.add_argument(
         "--password-env",
         metavar="NAME",
         default=None,
-        help="Read the password from environment variable NAME instead of prompting. "
-        "Never pass a password on the command line; it is visible in ps(1).",
+        help=f"read the password from environment variable NAME (default ${ENV_PASSWORD})",
     )
-    p.add_argument(
+    parser.add_argument(
+        "-e",
+        "--env-file",
+        metavar="FILE",
+        default=None,
+        help="load settings from FILE (default: ./.env, then ~/.fermi_sso.env)",
+    )
+    parser.add_argument(
+        "--no-env-file",
+        action="store_true",
+        help="ignore .env files entirely",
+    )
+    parser.add_argument(
+        "--idp-host",
+        default=None,
+        help=f"identity provider hostname used to detect a stalled login "
+        f"(default: {DEFAULT_IDP_HOST})",
+    )
+    parser.add_argument(
+        "-x",
+        "--expect",
+        metavar="TEXT",
+        default=None,
+        help="require TEXT to appear in the final page for success",
+    )
+    parser.add_argument(
         "-o",
         "--output",
         metavar="FILE",
         default=None,
-        help="Write the final response body to FILE for inspection",
+        help="write the final response body to FILE ('-' for stdout)",
     )
-    p.add_argument(
+    parser.add_argument(
+        "-n",
+        "--no-prompt",
+        action="store_true",
+        help="fail instead of prompting for a missing password (for cron/CI)",
+    )
+    parser.add_argument(
+        "-q", "--quiet", action="store_true", help="only print the final verdict"
+    )
+    parser.add_argument(
         "-d",
         "--debug",
         action="store_true",
-        default=os.environ.get("FERMI_SSO_DEBUG", "") == "1",
-        help="Enable wire-level and library debug logging",
+        default=None,
+        help=f"wire-level and library debug logging (${ENV_DEBUG}=1)",
     )
-    return p.parse_args(argv)
+    parser.add_argument("-V", "--version", action="version", version=__version__)
+    return parser
 
 
 def enable_debug():
@@ -79,79 +330,98 @@ def enable_debug():
     logging.getLogger("requests_fermi_sso").setLevel(logging.DEBUG)
 
 
-def main(argv=None):
-    args = parse_args(argv)
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    environ = dict(os.environ)
 
-    if not args.user:
-        print("error: no username; pass --user or set $FERMI_USER", file=sys.stderr)
+    def warn(message):
+        print(message, file=sys.stderr)
+
+    if args.no_env_file:
+        dotenv: Dict[str, str] = {}
+    else:
+        env_path = find_env_file(args.env_file, environ)
+        if args.env_file and not os.path.isfile(os.path.expanduser(args.env_file)):
+            warn(f"error: env file not found: {args.env_file}")
+            return 2
+        dotenv = load_env_file(env_path, warn=warn)
+
+    url = resolve(args.url_opt or args.url, ENV_URL, environ, dotenv, DEFAULT_URL)
+    user = resolve(args.user, ENV_USER, environ, dotenv, environ.get("USER"))
+    idp_host = resolve(
+        args.idp_host, ENV_IDP_HOST, environ, dotenv, DEFAULT_IDP_HOST
+    )
+    debug = args.debug
+    if debug is None:
+        debug = resolve(None, ENV_DEBUG, environ, dotenv, "") == "1"
+
+    if not user:
+        warn(f"error: no username; pass --user or set ${ENV_USER}")
         return 2
 
-    if args.password_env:
-        password = os.environ.get(args.password_env)
-        if not password:
-            print(
-                f"error: ${args.password_env} is unset or empty", file=sys.stderr
-            )
-            return 2
-    else:
-        password = getpass.getpass(f"Fermilab services password for {args.user}: ")
+    prompt = None
+    if not args.no_prompt and sys.stdin.isatty():
+        prompt = lambda: getpass.getpass(f"Fermilab password for {user}: ")
 
-    if ":" in password:
-        # FermiSSOSession splits "user:pass" on every colon and unpacks into
-        # two names, so an embedded colon raises ValueError deep in __init__.
-        print(
-            "error: password contains ':', which requests_fermi_sso cannot parse",
-            file=sys.stderr,
+    try:
+        password = resolve_password(args, environ, dotenv, prompt=prompt)
+    except ValueError as exc:
+        warn(f"error: {exc}")
+        return 2
+
+    if not password:
+        warn(
+            f"error: no password; use --password, --password-env, "
+            f"${ENV_PASSWORD}, or a .env file"
         )
         return 2
 
-    if args.debug:
+    if ":" in password:
+        # FermiSSOSession splits "user:pass" on every colon and unpacks the
+        # result into two names, so an embedded colon raises ValueError in
+        # its __init__. Report it here rather than as a traceback.
+        warn("error: password contains ':', which requests_fermi_sso cannot parse")
+        return 2
+
+    if debug:
         enable_debug()
 
-    session = FermiSSOSession(userpass=f"{args.user}:{password}")
+    session = FermiSSOSession(userpass=f"{user}:{password}")
 
-    print(f"fetching {args.url}", file=sys.stderr)
-    resp = session.get(args.url)
+    if not args.quiet:
+        warn(f"fetching {url} as {user}")
 
-    print("", file=sys.stderr)
-    print(f"final url : {resp.url}", file=sys.stderr)
-    print(f"status    : {resp.status_code}", file=sys.stderr)
-    print(f"bytes     : {len(resp.text)}", file=sys.stderr)
-    print(
-        f"cookies   : {sorted(c.name for c in session.cookies)}", file=sys.stderr
-    )
-    print(
-        f"redirects : {[h.status_code for h in resp.history]}", file=sys.stderr
-    )
+    resp = session.get(url)
+    ok, reasons = classify(session, resp, idp_host, args.expect)
+
+    if not args.quiet:
+        warn("")
+        warn(f"final url : {resp.url}")
+        warn(f"status    : {resp.status_code}")
+        warn(f"bytes     : {len(resp.text)}")
+        warn(f"cookies   : {sorted(c.name for c in session.cookies)}")
+        warn(f"redirects : {[h.status_code for h in resp.history]}")
+        warn("")
 
     if args.output:
-        with open(args.output, "w", encoding="utf-8") as fh:
-            fh.write(resp.text)
-        print(f"body written to {args.output}", file=sys.stderr)
+        if args.output == "-":
+            sys.stdout.write(resp.text)
+        else:
+            with open(args.output, "w", encoding="utf-8") as handle:
+                handle.write(resp.text)
+            if not args.quiet:
+                warn(f"body written to {args.output}")
 
-    # Decide success: we must be off the IdP and past the login form.
-    stuck_at_idp = IDP_HOST in resp.url
-    still_login = bool(session.login_page_re.search(resp.text))
-    still_choose = bool(session.choose_page_re.search(resp.text))
+    if ok:
+        warn("RESULT: login SUCCEEDED")
+        if not args.quiet:
+            warn(f"  landed on {resp.url}")
+        return 0
 
-    print("", file=sys.stderr)
-    if stuck_at_idp or still_login or still_choose:
-        print("RESULT: login FAILED", file=sys.stderr)
-        if still_choose:
-            print("  still on the choose-authentication page", file=sys.stderr)
-        if still_login:
-            print(
-                "  still on the login form -- bad password, or the account "
-                "requires MFA (this package only does password auth)",
-                file=sys.stderr,
-            )
-        if stuck_at_idp and not (still_login or still_choose):
-            print(f"  stranded on {IDP_HOST} at an unrecognized page", file=sys.stderr)
-        return 1
-
-    print("RESULT: login SUCCEEDED", file=sys.stderr)
-    print(f"  landed on {resp.url}", file=sys.stderr)
-    return 0
+    warn("RESULT: login FAILED")
+    for reason in reasons:
+        warn(f"  {reason}")
+    return 1
 
 
 if __name__ == "__main__":

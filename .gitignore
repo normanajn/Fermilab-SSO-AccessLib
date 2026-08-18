@@ -1,3 +1,9 @@
+# Credential files -- never commit these. env.example is the template
+# and is intentionally not matched here.
+.env
+.fermi_sso.env
+*.env.local
+
 # Python virtual environment
 venv/
 
