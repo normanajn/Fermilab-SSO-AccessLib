@@ -65,11 +65,13 @@ class FermiSSOSession(requests.Session):
         else:
             self.login_form_data = None
 
+        # PingFederate serves the same choose/login pages for SAML (paths under
+        # /idp/) and for OIDC / OAuth2 (paths under /as/). Accept both.
         self.choose_page_re = re.compile(
-            '<form.*method="GET".*action="(/idp/[^"]*)".*>'
+            '<form.*method="GET".*action="(/(?:idp|as)/[^"]*)".*>'
         )
         self.login_page_re = re.compile(
-            '<form.*method="POST".*action="(/idp/[^"]*)".*>'
+            '<form.*method="POST".*action="(/(?:idp|as)/[^"]*)".*>'
         )
         self.base_re = re.compile('<base href="(.*)/"/>')
         self.postback_form_re = re.compile(
@@ -101,11 +103,14 @@ class FermiSSOSession(requests.Session):
         check for various pages in the SSO login sequence, and
         send them appropriate responses
         """
-        res = requests.Session.send(self, req, **send_kwargs)
-        logger.debug(f"returning {res=}")
         if self.logging_in_already:
             # recursively called from a get() or post(), below...
-            return res
+            return requests.Session.send(self, req, **send_kwargs)
+
+        jar_before = self._jar_signature()
+        res = requests.Session.send(self, req, **send_kwargs)
+        logger.debug(f"returning {res=}")
+        performed_login = False
 
         m = self.choose_page_re.search(res.text)
         if m:
@@ -123,8 +128,15 @@ class FermiSSOSession(requests.Session):
             logger.debug("got Login page...")
             url = self.extract_login_url(res)
             res = requests.Session.post(self, url, data=self.login_form_data)
-            m = self.login_page_re.search(res.text)
+            # Being served the login form again means the password was
+            # rejected. Anything else -- a SAML postback form, or for OIDC the
+            # already-followed redirect back to the application -- means the
+            # IdP accepted the credentials.
+            performed_login = not self.login_page_re.search(res.text)
 
+        # SAML flows end with an auto-submitting postback form. OIDC flows end
+        # with a 302 to the client's redirect_uri, which requests has already
+        # followed by this point, so there is nothing more to do for them.
         m = self.postback_form_re.search(res.text)
         if m:
             logger.debug("saw Postback form...")
@@ -133,19 +145,34 @@ class FermiSSOSession(requests.Session):
             logger.debug("=-=-=-=-=-=-=-=")
             url, formdata = self.extract_post_back_data(res)
             res = requests.Session.post(self, url, data=formdata)
+            performed_login = True
+
+        if performed_login:
             self.login_count += 1
-            if self.cookie_file and self.cookie_save:
-                # the SP has just issued its application session cookie;
-                # persist the jar so the next process can skip all of this
-                try:
-                    self.save_cookies(self.cookie_file, self.cookie_format)
-                except OSError as exc:
-                    logger.warning(
-                        f"could not save cookies to {self.cookie_file}: {exc}"
-                    )
+
+        # Persist the jar whenever this request changed it: after a login,
+        # but also when the IdP's own session cookie let a second site sign
+        # us in via a plain redirect chain with no login sequence at all.
+        # An unchanged jar -- typically a reused browser export -- is left
+        # alone.
+        if (
+            self.cookie_file
+            and self.cookie_save
+            and (performed_login or self._jar_signature() != jar_before)
+        ):
+            try:
+                self.save_cookies(self.cookie_file, self.cookie_format)
+            except OSError as exc:
+                logger.warning(f"could not save cookies to {self.cookie_file}: {exc}")
 
         self.logging_in_already = False
         return res
+
+    def _jar_signature(self):
+        """Hashable snapshot of the jar, for change detection."""
+        return frozenset(
+            (c.domain, c.path, c.name, c.value, c.expires) for c in self.cookies
+        )
 
     def extract_post_back_data(self, resp):
         """utiltity to regex match the data for the postback form"""

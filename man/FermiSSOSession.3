@@ -36,7 +36,10 @@ recognizes and answers three pages, in order:
 A form with
 .B method="GET"
 and an action under
-.IR /idp/ .
+.I /idp/
+(SAML) or
+.I /as/
+(OIDC / OAuth2).
 The session re\-requests it with
 .B pfidpadapterid=ad..FormBased
 and
@@ -47,7 +50,9 @@ selecting password authentication.
 A form with
 .B method="POST"
 and an action under
-.IR /idp/ .
+.I /idp/
+or
+.IR /as/ .
 The session posts
 .BR pf.username ,
 .BR pf.pass ,
@@ -65,6 +70,11 @@ and
 .BR SAMLResponse .
 The session posts it to the service provider, which sets the application
 session cookie.
+.PP
+OIDC flows have no postback form: the identity provider answers the login
+POST with a redirect to the application's callback, which
+.B requests
+follows on its own, so the sequence ends one step earlier.
 .PP
 A
 .B logging_in_already
@@ -121,11 +131,12 @@ and new files are written in that format.
 .B cookie_save
 When true the jar is rewritten to
 .B cookie_file
-each time this session completes a login sequence. Defaults to true whenever
+after any request that completed a login sequence or otherwise changed the
+jar, for example a second site behind the same identity provider signing
+the session in through a bare redirect chain. Defaults to true whenever
 .B cookie_file
-is given. A run that never logs in, because the loaded cookies were
-accepted, never touches the file, so a browser export is not overwritten
-unless it has gone stale and a password login replaced it.
+is given. A request that leaves the jar unchanged never touches the file, so
+a browser export is not rewritten unless the site issued new cookies.
 .RE
 .PP
 Without
@@ -303,7 +314,10 @@ print(r.text)
 .RE
 .PP
 Cookies persist on the session, so later requests to the same service
-provider skip the login round trip entirely.
+provider skip the login round trip entirely. The identity provider's own
+session cookie persists too, so a jar filled by logging in to one site
+usually signs the session in to a second site behind the same IdP with no
+login sequence at all; the second site's cookies are then added to the jar.
 .PP
 Log in once, then reuse the jar from a later process with no password:
 .PP
@@ -330,6 +344,22 @@ then:
 .EX
 s = FermiSSOSession(cookie_file="/path/to/cookies.txt", cookie_save=False)
 r = s.get("https://mu2e\-docdb.fnal.gov/cgi\-bin/sso/DocumentDatabase")
+.EE
+.RE
+.PP
+Some applications put a confirmation form of their own in front of the
+identity provider. django\-allauth, for instance, serves a "Sign In via SSO"
+page whose form must be POSTed with its CSRF token before the redirect to
+the IdP happens. The library handles only the IdP's pages, so drive that
+step yourself and let the session take over from there:
+.PP
+.RS
+.EX
+import re
+start = "https://mu2e\-talks.fnal.gov/accounts/oidc/keycloak/login/?next=%2F"
+r = s.get(start)
+token = re.search(r'name="csrfmiddlewaretoken" value="([^"]+)"', r.text).group(1)
+r = s.post(start, data={"csrfmiddlewaretoken": token}, headers={"Referer": start})
 .EE
 .RE
 .SH LIMITATIONS

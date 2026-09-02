@@ -314,6 +314,27 @@ def test_classify_ignores_idp_host_when_blank(session):
     assert ok
 
 
+def test_classify_rejects_an_application_signin_page(session):
+    """
+    django-allauth's SSO confirmation page is off the IdP and matches none of
+    the IdP patterns, but it is still a sign-in page. Seen at
+    mu2e-talks.fnal.gov/accounts/oidc/keycloak/login/, 2026-09-02.
+    """
+    page = '<html><head><title>Sign In via SSO \u2014 Mu2eTalks</title></head><body><form method="post"></form></body></html>'
+    ok, reasons = _classify(
+        session, page, "https://mu2e-talks.fnal.gov/accounts/oidc/keycloak/login/"
+    )
+    assert not ok
+    assert any("application sign-in page" in r for r in reasons)
+
+
+def test_classify_accepts_ordinary_titles(session):
+    for title in ("Dashboard | Mu2eTalks", "Mu2e Document Database", "Shift Calendar"):
+        page = f"<html><head><title>{title}</title></head><body>ok</body></html>"
+        ok, _ = _classify(session, page, SP + "/x")
+        assert ok, title
+
+
 def _classify(session, text, url, idp_host=probe.DEFAULT_IDP_HOST, expect=None):
     return probe.classify(session, _resp(text, url), idp_host, expect)
 

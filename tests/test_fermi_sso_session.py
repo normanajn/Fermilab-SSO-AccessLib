@@ -11,12 +11,18 @@ from conftest import (
     CHOOSE_PAGE,
     FINAL_PAGE,
     LOGIN_PAGE,
+    OIDC_CHOOSE_PAGE,
+    OIDC_FINAL_PAGE,
+    OIDC_LOGIN_PAGE,
+    OIDC_RESUME,
+    OIDC_TARGET,
     POSTBACK_PAGE,
     RESUME,
     SP,
     TARGET,
     ScriptedAdapter,
     make_response,
+    oidc_handler,
     sso_handler,
 )
 
@@ -53,6 +59,26 @@ def test_page_patterns_do_not_cross_match(session):
     # the postback form uses lowercase method="post" and an absolute action
     assert not session.login_page_re.search(POSTBACK_PAGE)
     assert not session.choose_page_re.search(POSTBACK_PAGE)
+
+
+def test_oidc_pages_are_recognized(session):
+    """
+    The OIDC/OAuth2 authorization flow serves the same forms under /as/
+    rather than /idp/. Seen live at mu2e-shifts.fnal.gov, 2026-09-02.
+    """
+    match = session.choose_page_re.search(OIDC_CHOOSE_PAGE)
+    assert match and match.group(1) == OIDC_RESUME
+    match = session.login_page_re.search(OIDC_LOGIN_PAGE)
+    assert match and match.group(1) == OIDC_RESUME
+    assert not session.login_page_re.search(OIDC_CHOOSE_PAGE)
+    assert not session.choose_page_re.search(OIDC_LOGIN_PAGE)
+
+
+def test_unrelated_form_paths_are_not_mistaken_for_sso(session):
+    page = '<form method="GET" action="/search"><input name="q"></form>'
+    assert not session.choose_page_re.search(page)
+    page = '<form method="POST" action="/login"><input name="user"></form>'
+    assert not session.login_page_re.search(page)
 
 
 def test_final_page_matches_nothing(session):
@@ -158,6 +184,44 @@ def test_without_credentials_the_walk_stops_at_the_login_form(
     resp = anon_session.get(TARGET)
     assert anon_session.login_page_re.search(resp.text)
     assert sso_adapter.methods == ["GET", "GET"]
+
+
+def test_oidc_flow_logs_in_without_a_postback_step(tmp_path):
+    adapter = ScriptedAdapter(oidc_handler)
+    jar = tmp_path / "shifts.txt"
+    s = FermiSSOSession(userpass="testuser:s3cret", cookie_file=str(jar))
+    s.mount("https://", adapter)
+
+    resp = s.get(OIDC_TARGET)
+
+    assert resp.text == OIDC_FINAL_PAGE
+    # three requests: target, choose-resume, login POST -- no postback form
+    assert adapter.methods == ["GET", "GET", "POST"]
+    assert "pfidpadapterid=ad..FormBased" in adapter.urls[1]
+    assert adapter.urls[2] == "https://pingprod.fnal.gov" + OIDC_RESUME
+    assert "pf.username=testuser" in adapter.calls[2].body
+    assert s.logging_in_already is False
+    # a login without a postback step still counts and still saves the jar;
+    # this was missed at first and found live against mu2e-shifts.fnal.gov
+    assert s.login_count == 1
+    assert jar.exists()
+
+
+def test_rejected_password_neither_counts_nor_saves(tmp_path):
+    from conftest import OIDC_LOGIN_PAGE
+
+    def handler(request):
+        if OIDC_RESUME in request.url and request.method == "POST":
+            return OIDC_LOGIN_PAGE  # IdP re-serves the form: bad password
+        return oidc_handler(request)
+
+    jar = tmp_path / "shifts.txt"
+    s = FermiSSOSession(userpass="testuser:wrong", cookie_file=str(jar))
+    s.mount("https://", ScriptedAdapter(handler))
+    resp = s.get(OIDC_TARGET)
+    assert s.login_page_re.search(resp.text)
+    assert s.login_count == 0
+    assert not jar.exists()
 
 
 def test_non_sso_page_passes_through_untouched(sso_session, sso_adapter):

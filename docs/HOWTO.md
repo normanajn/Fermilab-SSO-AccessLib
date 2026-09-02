@@ -214,6 +214,9 @@ Rules of the road:
   right combination for cron, with the password in a mode-600 env file.
 - **Jar that does not exist yet**: a password is required, and the login that
   results creates the file.
+- **Saving**: the jar is rewritten after a login, and after any request that
+  changed the jar, such as a second site issuing its own session cookie. A
+  request that leaves the jar unchanged leaves the file unchanged.
 - **`--no-save-cookies`**: never rewrite the file. Use it with a browser
   export you want to keep as-is.
 - The path can also come from `$FERMI_SSO_COOKIE_FILE` or a
@@ -225,6 +228,39 @@ The probe's summary says which path was taken:
 login     : not needed (existing cookies accepted)
 login     : performed; cookies saved to /home/me/.fermi_sso.cookies
 ```
+
+### One jar, several sites
+
+The identity provider's own session cookie is saved alongside the site
+cookies. Once the jar holds a live IdP session, a second site behind the same
+IdP usually signs in with no login sequence at all: the site redirects to
+pingprod, pingprod recognizes the session and redirects straight back with an
+authorization code. The library notices that the jar gained cookies and saves
+it, so the second site is then also covered.
+
+Verified 2026-09-02: a password login to `mu2e-shifts.fnal.gov` followed by a
+cookies-only request to `mu2e-talks.fnal.gov` landed on the Talks dashboard
+without ever seeing a login form.
+
+### Sites with their own confirmation step
+
+Some applications put a page of their own in front of the IdP. Mu2eTalks
+(django-allauth) serves a "Sign In via SSO" page whose form has to be POSTed
+with its CSRF token before anything is redirected to pingprod. The library
+handles only the IdP's pages, so do that step yourself and let the session
+carry on from there:
+
+```python
+import re
+start = "https://mu2e-talks.fnal.gov/accounts/oidc/keycloak/login/?next=%2F"
+r = s.get(start)
+token = re.search(r'name="csrfmiddlewaretoken" value="([^"]+)"', r.text).group(1)
+r = s.post(start, data={"csrfmiddlewaretoken": token}, headers={"Referer": start})
+```
+
+The probe cannot perform that POST, so pointed at such a URL it reports
+"landed on an application sign-in page". Once the jar holds the site's own
+session cookie, a plain request to the site root works from the probe.
 
 ### Using an MFA-enrolled account
 
@@ -273,6 +309,8 @@ The probe declares success only when all of these hold:
 
 - the final URL is off the identity provider host
 - the body matches none of the choose-auth, login-form, or postback patterns
+- the page title does not read as a sign-in page (a heuristic that catches
+  application-side login pages such as django-allauth's)
 - the `--expect` text is present, if given
 
 Common invocations:

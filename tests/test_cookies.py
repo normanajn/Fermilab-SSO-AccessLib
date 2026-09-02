@@ -358,3 +358,42 @@ def test_no_login_means_no_save(tmp_path):
     second.mount("https://", ScriptedAdapter(sso_handler))
     second.get(TARGET)
     assert os.stat(path).st_mtime_ns == mtime
+
+
+# --------------------------------------------------------------------------
+# saving when the jar changes without a login sequence
+# --------------------------------------------------------------------------
+
+
+def test_cookies_gained_without_a_login_are_saved(tmp_path):
+    """
+    A second site behind the same IdP signs us in through a bare redirect
+    chain when the IdP session cookie is still valid; no choose/login pages
+    appear, yet the new application cookie must land in the jar. Seen live
+    with mu2e-shifts -> mu2e-talks, 2026-09-02.
+    """
+    path = str(tmp_path / "cookies.txt")
+
+    def handler(request):
+        return FINAL_PAGE, ["talks_session=t-1; Path=/; Secure; HttpOnly"]
+
+    s = FermiSSOSession(cookie_file=path)
+    s.mount("https://", ScriptedAdapter(handler))
+    s.get("https://mu2e-talks.fnal.gov/")
+    assert s.login_count == 0
+    assert os.path.exists(path)
+    assert "talks_session" in open(path).read()
+
+
+def test_unchanged_jar_is_not_rewritten(tmp_path):
+    path = tmp_path / "cookies.txt"
+    path.write_text(f"mu2e-docdb.fnal.gov\tFALSE\t/\tTRUE\t0\t{SP_COOKIE}\tsess-1\n")
+    s = FermiSSOSession(cookie_file=str(path))
+    s.mount("https://", ScriptedAdapter(sso_handler))
+    assert s.get(TARGET).text == FINAL_PAGE
+    # the handler serves the page without a Set-Cookie when the cookie is
+    # presented, so the jar is unchanged and the file keeps its exact bytes
+    assert (
+        path.read_text()
+        == f"mu2e-docdb.fnal.gov\tFALSE\t/\tTRUE\t0\t{SP_COOKIE}\tsess-1\n"
+    )

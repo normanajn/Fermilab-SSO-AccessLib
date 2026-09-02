@@ -49,6 +49,10 @@ s = FermiSSOSession(cookie_file="~/.fermi_sso.cookies")
 resp = s.get(url)
 ```
 
+The identity provider's session cookie is saved too, so one jar typically
+covers every site behind Fermilab SSO: log in to one, and the others sign in
+through a bare redirect chain.
+
 The file may also be a browser's exported `cookies.txt`, which is the only
 way to use an MFA-enrolled account: log in once in the browser, export the
 cookies, and hand them to the session. Netscape `cookies.txt`, LWP, and

@@ -27,6 +27,8 @@ the final response URL is no longer on the identity provider host
 the body no longer matches the choose\-authentication, login\-form, or
 SAML postback patterns
 .IP \(bu 3
+the page title does not read as a sign\-in page
+.IP \(bu 3
 the text given to
 .B \-\-expect
 is present, if that option was used
@@ -323,6 +325,17 @@ authentication. See LIMITATIONS.
 The run was cookies\-only and the service provider did not accept them,
 typically because the session expired. Repeat with a password to refresh the
 jar, or re\-export from the browser.
+.TP
+.B landed on an application sign\-in page
+The identity provider pages are all behind us, but the final page's title
+says "Sign in" or "Log in": the application has its own login step that the
+library does not perform, such as django\-allauth's "Sign In via SSO"
+confirmation form. Complete that step in your own code (see
+.BR FermiSSOSession (3),
+EXAMPLES), or point the probe at a page that is served only once the
+application session exists. Use
+.B \-\-expect
+as well; this title check is a heuristic.
 .TP
 .B cannot load cookie file
 The file exists but could not be parsed in the detected or requested format.

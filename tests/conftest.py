@@ -61,6 +61,22 @@ POSTBACK_PAGE = """<html>
 </body></html>
 """.format(sp=SP, target=TARGET)
 
+#: The OIDC variant of the same two pages, as served for the Mu2e shift
+#: scheduler (captured 2026-09-02). Only the form action prefix differs:
+#: /as/.../resume/as/authorization.ping instead of /idp/.../resumeSAML20/...
+OIDC_SP = "https://mu2e-shifts.fnal.gov"
+OIDC_TARGET = OIDC_SP + "/login/oidc?next=/"
+OIDC_RESUME = "/as/lJsCVlRD92/resume/as/authorization.ping"
+OIDC_CHOOSE_PAGE = CHOOSE_PAGE.replace(RESUME, OIDC_RESUME).replace(
+    '<option value="ad..KrbOrForm">c. Kerberos (FERMI or FNAL)</option>',
+    '<option value="ad..CILogonCert">CILogonCert Only</option>\n'
+    '<option value="ad..kerbForm">Kerberos (FNAL or FERMI)</option>',
+)
+OIDC_LOGIN_PAGE = LOGIN_PAGE.replace(RESUME, OIDC_RESUME)
+OIDC_FINAL_PAGE = """<html><head><title>Mu2e Shift Scheduler</title></head>
+<body><h1>Shifts</h1><p>Signed in as testuser.</p></body></html>
+"""
+
 FINAL_PAGE = """<html><head><title>Mu2e Document Database</title></head>
 <body><h1>DocDB Home</h1><p>Welcome, testuser.</p></body></html>
 """
@@ -192,3 +208,24 @@ def anon_session(sso_adapter):
     session = FermiSSOSession()
     session.mount("https://", sso_adapter)
     return session
+
+
+def oidc_handler(request):
+    """
+    Serve the OIDC flavour of the sequence, with no SAML postback.
+
+    login/oidc          -> choose-authentication page (in reality a 302 to
+                           the IdP that requests follows; the scripted adapter
+                           serves the IdP page directly)
+    resume URL + query  -> login form
+    POST to resume URL  -> the protected page (standing in for the 302 chain
+                           back through /oidc/callback that requests follows)
+    """
+    url, method = request.url, request.method
+    if OIDC_RESUME in url:
+        if method == "POST":
+            return OIDC_FINAL_PAGE
+        return OIDC_LOGIN_PAGE
+    if url.startswith(OIDC_TARGET):
+        return OIDC_CHOOSE_PAGE
+    return PLAIN_PAGE

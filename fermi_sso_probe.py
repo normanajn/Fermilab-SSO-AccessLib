@@ -200,6 +200,19 @@ def resolve_password(
 # result classification
 # --------------------------------------------------------------------------
 
+import re
+
+#: Titles that mark an application's own sign-in page, seen after the IdP
+#: pages are all behind us. Deliberately narrow: "Sign in", "Log in",
+#: "Login" as a word, not any page mentioning logging in.
+SIGNIN_TITLE_RE = re.compile(r"\b(sign[ -]?in|log[ -]?in|login)\b", re.I)
+_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
+
+
+def _page_title(text: str) -> str:
+    match = _TITLE_RE.search(text)
+    return " ".join(match.group(1).split()) if match else ""
+
 
 def classify(
     session: FermiSSOSession,
@@ -233,6 +246,15 @@ def classify(
         reasons.append("stopped on the SAML postback form; it was not submitted")
     if idp_host and idp_host in resp.url and not reasons:
         reasons.append(f"stranded on {idp_host} at an unrecognized page")
+    title = _page_title(resp.text)
+    if not reasons and title and SIGNIN_TITLE_RE.search(title):
+        # Off the IdP and past its forms, but the application itself is still
+        # showing a sign-in page: e.g. django-allauth's "Sign In via SSO"
+        # confirmation, which needs a POST the library does not perform.
+        reasons.append(
+            f"landed on an application sign-in page (title {title!r}); the "
+            "site's own login step was not completed"
+        )
     if expect and expect not in resp.text:
         reasons.append(f"expected text {expect!r} not found in the response body")
 
