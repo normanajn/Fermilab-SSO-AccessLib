@@ -18,7 +18,6 @@ from conftest import (
     make_response,
 )
 
-
 # --------------------------------------------------------------------------
 # .env parsing
 # --------------------------------------------------------------------------
@@ -210,7 +209,9 @@ def test_password_commandline_beats_everything():
 
 def test_password_environment_beats_dotenv():
     environ = {probe.ENV_PASSWORD: "env"}
-    assert probe.resolve_password(_args(), environ, {probe.ENV_PASSWORD: "dot"}) == "env"
+    assert (
+        probe.resolve_password(_args(), environ, {probe.ENV_PASSWORD: "dot"}) == "env"
+    )
 
 
 def test_password_prompts_as_last_resort():
@@ -231,7 +232,9 @@ def test_url_can_be_positional():
 
 
 def test_url_can_be_an_option():
-    assert probe.build_parser().parse_args(["-U", "https://x/y"]).url_opt == "https://x/y"
+    assert (
+        probe.build_parser().parse_args(["-U", "https://x/y"]).url_opt == "https://x/y"
+    )
 
 
 def test_url_defaults_to_none_so_precedence_applies():
@@ -265,11 +268,19 @@ def test_classify_success(session):
     assert ok and reasons == []
 
 
-def test_classify_detects_login_page(session):
+def test_classify_detects_login_page():
+    session = FermiSSOSession(userpass="u:p")
     ok, reasons = _classify(session, LOGIN_PAGE, "https://pingprod.fnal.gov/idp/x")
     assert not ok
     assert any("still on the login form" in r for r in reasons)
     assert any("MFA" in r for r in reasons)
+
+
+def test_classify_login_page_without_credentials_blames_the_cookies(session):
+    """With no userpass the only way in was the cookie jar, so say so."""
+    ok, reasons = _classify(session, LOGIN_PAGE, "https://pingprod.fnal.gov/idp/x")
+    assert not ok
+    assert any("cookie file" in r and "no password" in r for r in reasons)
 
 
 def test_classify_detects_choose_page(session):
@@ -381,3 +392,122 @@ def _patch_session(monkeypatch):
         return session
 
     monkeypatch.setattr(probe, "FermiSSOSession", factory)
+
+
+# --------------------------------------------------------------------------
+# cookie file handling in main()
+# --------------------------------------------------------------------------
+
+
+def test_cookie_file_option_parses():
+    args = probe.build_parser().parse_args(
+        ["-c", "/tmp/j.txt", "--cookie-format", "json"]
+    )
+    assert args.cookie_file == "/tmp/j.txt"
+    assert args.cookie_format == "json"
+    assert args.no_save_cookies is False
+
+
+def test_cookie_file_resolves_from_environment_and_dotenv():
+    environ = {probe.ENV_COOKIE_FILE: "/from/env"}
+    assert probe.resolve(None, probe.ENV_COOKIE_FILE, environ, {}) == "/from/env"
+    dotenv = {probe.ENV_COOKIE_FILE: "/from/dotenv"}
+    assert probe.resolve(None, probe.ENV_COOKIE_FILE, {}, dotenv) == "/from/dotenv"
+    assert probe.resolve("/cli", probe.ENV_COOKIE_FILE, environ, dotenv) == "/cli"
+
+
+def test_main_login_writes_cookie_file_then_reuses_it(monkeypatch, tmp_path, capsys):
+    """First run: password login populates the jar. Second run: no password."""
+    _patch_session(monkeypatch)
+    monkeypatch.delenv(probe.ENV_PASSWORD, raising=False)
+    jar = tmp_path / "cookies.txt"
+
+    argv = ["--no-env-file", "-u", "testuser", "-p", "s3cret", "-c", str(jar), TARGET]
+    assert probe.main(argv) == 0
+    err = capsys.readouterr().err
+    assert jar.exists()
+    assert "login     : performed" in err
+    assert f"saved to {jar}" in err
+
+    argv = ["--no-env-file", "-n", "-c", str(jar), "-x", "DocDB Home", TARGET]
+    assert probe.main(argv) == 0
+    err = capsys.readouterr().err
+    assert "with cookies only" in err
+    assert "login     : not needed" in err
+    assert "RESULT: login SUCCEEDED" in err
+
+
+def test_main_cookie_file_from_env_needs_no_password(monkeypatch, tmp_path, capsys):
+    _patch_session(monkeypatch)
+    jar = tmp_path / "cookies.txt"
+    probe.main(
+        ["--no-env-file", "-u", "testuser", "-p", "s3cret", "-c", str(jar), TARGET]
+    )
+    capsys.readouterr()
+
+    monkeypatch.setenv(probe.ENV_COOKIE_FILE, str(jar))
+    monkeypatch.delenv(probe.ENV_PASSWORD, raising=False)
+    monkeypatch.delenv(probe.ENV_USER, raising=False)
+    monkeypatch.delenv("USER", raising=False)
+    assert probe.main(["--no-env-file", "-n", TARGET]) == 0
+    assert "RESULT: login SUCCEEDED" in capsys.readouterr().err
+
+
+def test_main_missing_cookie_file_still_requires_a_password(
+    monkeypatch, tmp_path, capsys
+):
+    _patch_session(monkeypatch)
+    monkeypatch.delenv(probe.ENV_PASSWORD, raising=False)
+    argv = [
+        "--no-env-file",
+        "-n",
+        "-u",
+        "alice",
+        "-c",
+        str(tmp_path / "new.txt"),
+        TARGET,
+    ]
+    assert probe.main(argv) == 2
+    assert "no password" in capsys.readouterr().err
+
+
+def test_main_stale_cookies_without_password_fail_clearly(
+    monkeypatch, tmp_path, capsys
+):
+    _patch_session(monkeypatch)
+    jar = tmp_path / "cookies.txt"
+    jar.write_text("mu2e-docdb.fnal.gov\tFALSE\t/\tTRUE\t0\tunrelated\tx\n")
+    monkeypatch.delenv(probe.ENV_PASSWORD, raising=False)
+    assert probe.main(["--no-env-file", "-n", "-c", str(jar), TARGET]) == 1
+    err = capsys.readouterr().err
+    assert "RESULT: login FAILED" in err
+    assert "no password was supplied" in err
+
+
+def test_main_no_save_cookies_leaves_jar_untouched(monkeypatch, tmp_path, capsys):
+    _patch_session(monkeypatch)
+    jar = tmp_path / "cookies.txt"
+    jar.write_text("# nothing useful\n")
+    argv = [
+        "--no-env-file",
+        "-u",
+        "u",
+        "-p",
+        "p",
+        "-c",
+        str(jar),
+        "--no-save-cookies",
+        TARGET,
+    ]
+    assert probe.main(argv) == 0
+    assert jar.read_text() == "# nothing useful\n"
+    assert "cookies not saved" in capsys.readouterr().err
+
+
+def test_main_unreadable_cookie_file_is_a_usage_error(monkeypatch, tmp_path, capsys):
+    _patch_session(monkeypatch)
+    jar = tmp_path / "bad.json"
+    jar.write_text("{not json")
+    argv = ["--no-env-file", "-n", "-c", str(jar), TARGET]
+    assert probe.main(argv) == 2
+    assert "cannot load cookie file" in capsys.readouterr().err

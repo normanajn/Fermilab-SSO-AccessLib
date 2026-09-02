@@ -1,10 +1,11 @@
 
 ## Fermi SSO signon for Scripts
 
-This is a Session subclass for the Python requests library that will let scripts sign into Fermilab SSO with a user name and password.
+This is a Session subclass for the Python requests library that will let scripts sign into Fermilab SSO with a user name and password, or with cookies saved from an earlier login.
 
 Basic theory:  If we go to fetch a page and get sent to the SSO pages, we choose password authentication and login and then go on to the page.
 Non-interactive scripts would need to request a "special account" from the authentication folks for a username and password to pass.
+Alternatively the cookies from one successful login (including a browser login that passed MFA) can be saved to a file and reused until the site's session expires.
 
 ### Install
 
@@ -34,6 +35,27 @@ if s.login_page_re.search(resp.text):
 
 Cookies persist on the session, so later requests skip the login round trip.
 
+### Reusing cookies across runs
+
+Pass `cookie_file` and the jar is loaded before the first request and saved
+after each completed login. A later process needs no password:
+
+```python
+# once, or whenever the saved session has expired
+FermiSSOSession(userpass=f"{user}:{password}", cookie_file="~/.fermi_sso.cookies").get(url)
+
+# afterwards
+s = FermiSSOSession(cookie_file="~/.fermi_sso.cookies")
+resp = s.get(url)
+```
+
+The file may also be a browser's exported `cookies.txt`, which is the only
+way to use an MFA-enrolled account: log in once in the browser, export the
+cookies, and hand them to the session. Netscape `cookies.txt`, LWP, and
+JSON formats are read and written; see `man ./man/FermiSSOSession.3`.
+The jar holds live session cookies, so it is written mode 600 and should be
+treated like a password.
+
 ### Checking that a login works
 
 `fermi-sso-probe` fetches an SSO-protected URL and reports whether the login
@@ -49,6 +71,14 @@ Credentials come from the command line, the environment, or a `.env` file, in
 that order of priority; failing all three it prompts. Copy `env.example` to
 `.env` or `~/.fermi_sso.env` to set them up. Exit status is 0 on success, 1
 on a failed login, 2 on a usage error.
+
+With `-c FILE` the probe keeps its cookies between runs. The first run logs
+in with a password and writes the jar; later runs need neither:
+
+```
+fermi-sso-probe -u myaccount -c ~/.fermi_sso.cookies
+fermi-sso-probe -c ~/.fermi_sso.cookies -n -q
+```
 
 ### Documentation
 
@@ -69,6 +99,9 @@ credentials are needed.
 ### Limitations
 
 Only the `ad..FormBased` password adapter is driven, so accounts enrolled in
-MFA cannot complete this flow — that is what the "special account" above is
-for. Page recognition is regex-based and will break if the identity provider
-changes its markup. Sessions hold per-login state and are not thread-safe.
+MFA cannot complete this flow themselves — that is what the "special account"
+above is for, or else a browser login whose cookies are exported and passed
+in via `cookie_file`. Saved cookies last only as long as the site's session;
+expiry shows up as a login page, not an error. Page recognition is regex-based
+and will break if the identity provider changes its markup. Sessions hold
+per-login state and are not thread-safe.

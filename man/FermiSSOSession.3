@@ -1,4 +1,4 @@
-.TH FERMISSOSESSION 3 "2026-08-18" "requests-fermi-sso 0.1.0" "Python Library"
+.TH FERMISSOSESSION 3 "2026-09-02" "requests-fermi-sso 0.2.0" "Python Library"
 .SH NAME
 FermiSSOSession \- requests.Session subclass that logs into Fermilab SSO
 .SH SYNOPSIS
@@ -7,6 +7,10 @@ FermiSSOSession \- requests.Session subclass that logs into Fermilab SSO
 .sp
 .BI "s = FermiSSOSession(userpass=f\(dq{" user } : { pass }\(dq)
 .BI "r = s.get(\(dq" URL \(dq)
+.sp
+.BI "s = FermiSSOSession(cookie_file=\(dq" PATH \(dq)
+.BI "n = s.load_cookies(" PATH ", fmt=None, missing_ok=False)"
+.BI "n = s.save_cookies(" PATH ", fmt=None)"
 .EE
 .SH DESCRIPTION
 .B FermiSSOSession
@@ -68,22 +72,69 @@ flag suppresses this handling for the nested requests the session issues
 itself, preventing unbounded recursion. It is cleared before
 .B send()
 returns.
+.SS Cookie reuse
+Every cookie the identity provider and service provider set during a login
+lives in the session jar, so within one process only the first request pays
+for the login. With
+.B cookie_file
+that jar is loaded before the first request and written back after each
+completed login sequence, so the next process, or any other script pointed
+at the same file, is already logged in and needs no password at all.
+.PP
+The file may equally be a browser's exported
+.IR cookies.txt .
+That is the only route for an account enrolled in multi\-factor
+authentication: log in once in a browser, export the cookies for the
+service provider, and hand them to the session. Note that the session
+cookies are bearer credentials; the file is written mode 0600 and should be
+treated like a password.
 .SH CONSTRUCTOR
 .TP
-.BI FermiSSOSession( "\fR...\fP" ", userpass=" STRING )
-All arguments are passed to
+.BI FermiSSOSession( "\fR...\fP" ", userpass=" STRING ", cookie_file=" PATH ", cookie_format=" FMT ", cookie_save=" BOOL )
+The keywords below are consumed; all other arguments are passed to
 .BR requests.Session .
-The
+.RS
+.TP
 .B userpass
-keyword, if present, is consumed and split on
+Split on
 .RB \(dq : \(dq
-into a username and password.
+into a username and password for the identity provider's password adapter.
+.TP
+.B cookie_file
+Path of a cookie jar, with
+.B ~
+expanded. It is loaded immediately; a file that does not exist yet is
+ignored so a first run can create it. The number of cookies loaded is left in
+.BR cookies_loaded .
+.TP
+.B cookie_format
+One of
+.BR netscape ", " lwp ", or " json .
+Defaults to
+.BR None ,
+meaning detect from the file extension
+.RI ( .json ", " .lwp )
+and then the first line; unrecognized files are read as Netscape
+.IR cookies.txt ,
+and new files are written in that format.
+.TP
+.B cookie_save
+When true the jar is rewritten to
+.B cookie_file
+each time this session completes a login sequence. Defaults to true whenever
+.B cookie_file
+is given. A run that never logs in, because the loaded cookies were
+accepted, never touches the file, so a browser export is not overwritten
+unless it has gone stale and a password login replaced it.
+.RE
 .PP
 Without
 .BR userpass ,
 the session still selects an authentication method and submits postback
-forms, but never fills in the login form. This is useful for inspecting the
-flow without credentials.
+forms, but never fills in the login form. Combined with
+.B cookie_file
+this is the cookies\-only mode; alone, it is useful for inspecting the flow
+without credentials.
 .SH ATTRIBUTES
 .TP
 .B login_form_data
@@ -111,6 +162,26 @@ The identity provider adapter to select. Defaults to
 .TP
 .B logging_in_already
 Recursion guard; true only while a login sequence is in progress.
+.TP
+.B cookie_file
+.TQ
+.B cookie_format
+.TQ
+.B cookie_save
+The constructor arguments of the same names, after
+.B ~
+expansion.
+.TP
+.B cookies_loaded
+Number of cookies read from
+.B cookie_file
+by the constructor.
+.TP
+.B login_count
+Number of login sequences this session has completed. Zero after a request
+that the loaded cookies satisfied outright, which is how
+.BR fermi_sso_probe (1)
+reports whether cookie reuse worked.
 .SH METHODS
 Beyond the inherited
 .B requests.Session
@@ -131,6 +202,71 @@ Absolute URL that selects password authentication, query string included.
 Returns
 .RI ( url ", " formdata )
 for the SAML postback form.
+.TP
+.BI load_cookies( path ", fmt=None, missing_ok=False)"
+Merge the cookies in
+.I path
+into the session jar, skipping expired ones, and return the number loaded.
+.I fmt
+is detected as for the constructor when
+.BR None .
+A missing file raises
+.B FileNotFoundError
+unless
+.B missing_ok
+is set, in which case 0 is returned.
+.TP
+.BI save_cookies( path ", fmt=None)"
+Write the unexpired cookies in the jar to
+.IR path ,
+creating it mode 0600 via a temporary file and rename, and return the number
+written. Session cookies, which have no expiry, are written with expiry 0
+rather than dropped as
+.B http.cookiejar
+would. With
+.I fmt
+.B None
+the format follows the extension, defaulting to Netscape.
+.SH COOKIE FILE FORMATS
+.TP
+.B netscape
+The tab\-separated
+.I cookies.txt
+written by
+.BR curl (1)
+.BR \-c ,
+.BR wget (1),
+and the common browser export extensions. Seven fields per line: domain,
+include\-subdomains flag, path, secure flag, expiry (0 for a session cookie),
+name, value. HttpOnly cookies carry a
+.B #HttpOnly_
+prefix on the domain; this module reads and writes that prefix itself
+because
+.B http.cookiejar.MozillaCookieJar
+before Python 3.10 discards such lines as comments, which would drop exactly
+the SSO cookies that matter.
+.TP
+.B lwp
+The Set\-Cookie3 format of
+.BR http.cookiejar.LWPCookieJar .
+.TP
+.B json
+A list of objects with keys
+.BR name ", " value ", " domain ", " path ", " secure ", " httponly ", " host_only ", " expires
+(seconds since the epoch, or null for a session cookie). On input the
+camel\-case keys of the Cookie\-Editor and EditThisCookie browser extensions
+.RB ( expirationDate ", " httpOnly ", " hostOnly ", " session )
+are accepted too, as is a top\-level object with a
+.B cookies
+list.
+.SH FILES
+The library imposes no default path.
+.BR fermi_sso_probe (1)
+uses whatever
+.B \-\-cookie\-file
+or
+.B FERMI_SSO_COOKIE_FILE
+names.
 .SH RETURN VALUE
 .B send()
 returns a
@@ -168,11 +304,43 @@ print(r.text)
 .PP
 Cookies persist on the session, so later requests to the same service
 provider skip the login round trip entirely.
+.PP
+Log in once, then reuse the jar from a later process with no password:
+.PP
+.RS
+.EX
+# first run, or whenever the jar has gone stale
+s = FermiSSOSession(userpass="myaccount:mypassword",
+                    cookie_file="~/.fermi_sso.cookies")
+s.get("https://mu2e\-docdb.fnal.gov/cgi\-bin/sso/DocumentDatabase")
+
+# later runs
+s = FermiSSOSession(cookie_file="~/.fermi_sso.cookies")
+r = s.get("https://mu2e\-docdb.fnal.gov/cgi\-bin/DocDB/ShowDocument?docid=1234")
+if s.login_page_re.search(r.text):
+    raise SystemExit("cookies expired; run the password login again")
+.EE
+.RE
+.PP
+Use a browser session for an MFA\-enrolled account. In the browser, log in
+to the service provider, export its cookies with a cookies.txt extension,
+then:
+.PP
+.RS
+.EX
+s = FermiSSOSession(cookie_file="/path/to/cookies.txt", cookie_save=False)
+r = s.get("https://mu2e\-docdb.fnal.gov/cgi\-bin/sso/DocumentDatabase")
+.EE
+.RE
 .SH LIMITATIONS
 Only the
 .B ad..FormBased
 password adapter is driven; accounts requiring multi\-factor authentication
-cannot complete the flow. Page recognition is regular\-expression based and
+cannot complete the login flow themselves and must supply cookies from a
+browser session instead. Cookie reuse lasts only as long as the service
+provider's session; the library does not know the lifetime in advance and
+detects expiry only by landing on the login page again. Page recognition is
+regular\-expression based and
 will break if the identity provider changes its markup. The session holds
 per\-login state and must not be shared across threads.
 .SH SEE ALSO

@@ -4,6 +4,12 @@
 .fermi_sso.env
 *.env.local
 
+# Saved SSO cookie jars are bearer credentials
+*.cookies
+*.cookies.json
+*.cookies.lwp
+cookies.txt
+
 # Python virtual environment
 venv/
 

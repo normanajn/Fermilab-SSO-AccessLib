@@ -1,4 +1,4 @@
-.TH FERMI_SSO_PROBE 1 "2026-08-18" "requests-fermi-sso 0.1.0" "User Commands"
+.TH FERMI_SSO_PROBE 1 "2026-09-02" "requests-fermi-sso 0.2.0" "User Commands"
 .SH NAME
 fermi_sso_probe \- verify a Fermilab single sign\-on login
 .SH SYNOPSIS
@@ -40,6 +40,15 @@ Note that
 .I https://mu2e\-docdb.fnal.gov/
 itself is an unprotected landing page and does not exercise the login flow.
 Any other SSO\-protected URL may be given instead.
+.PP
+With
+.B \-\-cookie\-file
+the session cookies are loaded before the request and saved after a
+completed login. Later runs, and any other script pointed at the same jar,
+then skip the password step entirely. A browser's exported
+.I cookies.txt
+serves as the jar too, which is the only way to drive an MFA\-enrolled
+account.
 .SH OPTIONS
 .TP
 .BI \-u " NAME" "\fR, \fP" \-\-user " NAME"
@@ -79,6 +88,35 @@ using the first that exists.
 Ignore env files entirely. Use this in cron and CI so a stray
 .I .env
 in the working directory cannot change the result.
+.TP
+.BI \-c " FILE" "\fR, \fP" \-\-cookie\-file " FILE"
+Load cookies from
+.I FILE
+before the request and write the jar back to it after any completed login.
+When
+.I FILE
+exists a password is optional: the probe first tries the cookies alone, and
+only if a password was also supplied does it fall back to logging in, which
+refreshes the file. A
+.I FILE
+that does not exist yet still requires a password, and is created by the
+resulting login. Formats: Netscape
+.I cookies.txt
+(the default, and what browser export extensions and
+.B curl \-c
+produce), LWP, or JSON; see
+.BR FermiSSOSession (3).
+The file is written mode 0600.
+.TP
+.BI \-\-cookie\-format " FMT"
+Force the cookie file format:
+.BR netscape ", " lwp ", or " json .
+By default the format is detected from the file extension and first line,
+and new files are written as Netscape.
+.TP
+.B \-\-no\-save\-cookies
+Read the cookie file but never rewrite it. Use this with a browser export
+you want to keep pristine.
 .TP
 .BI \-\-idp\-host " HOST"
 Hostname of the identity provider, used to detect a login that stalled
@@ -137,6 +175,12 @@ built\-in defaults
 The password has one extra step: if no source supplies it and standard input
 is a terminal, the probe prompts for it without echo. An environment variable
 set to the empty string counts as absent.
+.PP
+When
+.B \-\-cookie\-file
+names an existing file, neither a username nor a password is required and
+the prompt is skipped; the cookies are tried on their own. Supply a password
+as well to let the probe log in and refresh the jar if the cookies are stale.
 .SH ENVIRONMENT
 .TP
 .B FERMI_USER
@@ -155,6 +199,14 @@ Default identity provider hostname.
 .TP
 .B FERMI_SSO_ENV_FILE
 Path to the env file, overriding the default search.
+.TP
+.B FERMI_SSO_COOKIE_FILE
+Default cookie jar path, as for
+.BR \-\-cookie\-file .
+.TP
+.B FERMI_SSO_COOKIE_FORMAT
+Default cookie file format, as for
+.BR \-\-cookie\-format .
 .TP
 .B FERMI_SSO_DEBUG
 Set to
@@ -182,10 +234,17 @@ Quote any value containing
 or a trailing comment will be stripped from it. Because these files hold a
 password, the probe warns when one is readable by group or other; keep them
 at mode 600.
+.TP
+.I cookies.txt
+No default location. Whatever
+.B \-\-cookie\-file
+names holds live session cookies, which are bearer credentials: keep it at
+mode 600, as the probe creates it, and treat it like a password.
 .SH EXIT STATUS
 .TP
 .B 0
-The login completed and all checks passed.
+The login completed, or the loaded cookies were accepted, and all checks
+passed.
 .TP
 .B 1
 The login did not complete, or the
@@ -193,8 +252,8 @@ The login did not complete, or the
 text was absent.
 .TP
 .B 2
-Usage error: no username, no password, a missing env file, or a password
-containing a colon.
+Usage error: no username, no password and no cookie file, a missing env
+file, an unreadable cookie file, or a password containing a colon.
 .SH EXAMPLES
 Probe the default Mu2e DocDB entry point, prompting for the password:
 .PP
@@ -227,11 +286,46 @@ Save the fetched page while watching the full exchange:
 fermi_sso_probe \-u myaccount \-d \-o /tmp/page.html 2> /tmp/trace.log
 .EE
 .RE
+.PP
+Log in once with a password and keep the cookies, then run without one:
+.PP
+.RS
+.EX
+fermi_sso_probe \-u myaccount \-c ~/.fermi_sso.cookies
+fermi_sso_probe \-c ~/.fermi_sso.cookies \-n \-q
+.EE
+.RE
+.PP
+Cron job that reuses cookies while they last and re\-logs in from the env
+file when they expire, refreshing the jar:
+.PP
+.RS
+.EX
+fermi_sso_probe \-\-env\-file ~/.fermi_sso.env \-c ~/.fermi_sso.cookies \-n \-q
+.EE
+.RE
+.PP
+Use an MFA\-enrolled account through cookies exported from a browser, without
+modifying the export:
+.PP
+.RS
+.EX
+fermi_sso_probe \-c ~/Downloads/cookies.txt \-\-no\-save\-cookies \-n
+.EE
+.RE
 .SH DIAGNOSTICS
 .TP
-.B still on the login form
+.B still on the login form -- wrong password, or the account requires MFA
 The password was rejected, or the account requires multi\-factor
 authentication. See LIMITATIONS.
+.TP
+.B still on the login form -- the cookie file did not yield a live session
+The run was cookies\-only and the service provider did not accept them,
+typically because the session expired. Repeat with a password to refresh the
+jar, or re\-export from the browser.
+.TP
+.B cannot load cookie file
+The file exists but could not be parsed in the detected or requested format.
 .TP
 .B still on the choose\-authentication page
 The identity provider did not accept the password\-authentication selection.
@@ -259,7 +353,10 @@ adapter, which is the identity provider's
 option. Accounts enrolled in multi\-factor authentication cannot complete
 this flow, because there is no path for a second factor. Non\-interactive
 scripts generally need a service account provisioned for password
-authentication.
+authentication, or must be fed cookies from a browser login with
+.BR \-\-cookie\-file .
+Those cookies last only as long as the service provider's session; the probe
+learns of expiry only by landing on the login page again.
 .PP
 Page recognition is done with regular expressions over the raw HTML. A markup
 change at the identity provider will present as a login failure rather than

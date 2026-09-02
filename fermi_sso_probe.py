@@ -9,6 +9,11 @@ fetches a URL through the session and reports success only when the final
 response has left the identity provider and no longer looks like any stage
 of the login sequence.
 
+With --cookie-file the session cookies are loaded before the request and
+saved after a completed login, so later runs -- and other scripts using the
+same jar -- skip the password step. A browser's exported cookies.txt works
+as the jar too, which is the only way to use an MFA-enrolled account.
+
 Settings resolve in this order, highest priority first:
 
     1. commandline options
@@ -28,7 +33,7 @@ from typing import Dict, List, Optional, Tuple
 
 from requests_fermi_sso import FermiSSOSession
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 #: Fetched when no URL is given. The Mu2e DocDB SSO entry point; note that
 #: https://mu2e-docdb.fnal.gov/ itself is an unprotected landing page and
@@ -47,6 +52,8 @@ ENV_URL = "FERMI_SSO_URL"
 ENV_IDP_HOST = "FERMI_SSO_IDP_HOST"
 ENV_DEBUG = "FERMI_SSO_DEBUG"
 ENV_ENV_FILE = "FERMI_SSO_ENV_FILE"
+ENV_COOKIE_FILE = "FERMI_SSO_COOKIE_FILE"
+ENV_COOKIE_FORMAT = "FERMI_SSO_COOKIE_FORMAT"
 
 
 # --------------------------------------------------------------------------
@@ -212,10 +219,16 @@ def classify(
     if session.choose_page_re.search(resp.text):
         reasons.append("still on the choose-authentication page")
     if session.login_page_re.search(resp.text):
-        reasons.append(
-            "still on the login form -- wrong password, or the account "
-            "requires MFA (this package only drives password auth)"
-        )
+        if session.login_form_data is None:
+            reasons.append(
+                "still on the login form -- the cookie file did not yield a "
+                "live session and no password was supplied to log in"
+            )
+        else:
+            reasons.append(
+                "still on the login form -- wrong password, or the account "
+                "requires MFA (this package only drives password auth)"
+            )
     if session.postback_form_re.search(resp.text):
         reasons.append("stopped on the SAML postback form; it was not submitted")
     if idp_host and idp_host in resp.url and not reasons:
@@ -278,6 +291,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-env-file",
         action="store_true",
         help="ignore .env files entirely",
+    )
+    parser.add_argument(
+        "-c",
+        "--cookie-file",
+        metavar="FILE",
+        default=None,
+        help=f"load cookies from FILE before the request and save them after a "
+        f"completed login (${ENV_COOKIE_FILE}). A browser cookies.txt export works. "
+        f"When FILE exists no password is required",
+    )
+    parser.add_argument(
+        "--cookie-format",
+        choices=("netscape", "lwp", "json"),
+        default=None,
+        help=f"cookie file format (${ENV_COOKIE_FORMAT}; default: detect from the "
+        f"extension and contents, write netscape)",
+    )
+    parser.add_argument(
+        "--no-save-cookies",
+        action="store_true",
+        help="load the cookie file but never rewrite it",
     )
     parser.add_argument(
         "--idp-host",
@@ -348,19 +382,25 @@ def main(argv=None) -> int:
 
     url = resolve(args.url_opt or args.url, ENV_URL, environ, dotenv, DEFAULT_URL)
     user = resolve(args.user, ENV_USER, environ, dotenv, environ.get("USER"))
-    idp_host = resolve(
-        args.idp_host, ENV_IDP_HOST, environ, dotenv, DEFAULT_IDP_HOST
-    )
+    idp_host = resolve(args.idp_host, ENV_IDP_HOST, environ, dotenv, DEFAULT_IDP_HOST)
     debug = args.debug
     if debug is None:
         debug = resolve(None, ENV_DEBUG, environ, dotenv, "") == "1"
+    cookie_file = resolve(args.cookie_file, ENV_COOKIE_FILE, environ, dotenv)
+    cookie_format = resolve(args.cookie_format, ENV_COOKIE_FORMAT, environ, dotenv)
+    if cookie_file:
+        cookie_file = os.path.expanduser(cookie_file)
+    # An existing jar may carry the whole session, so a password becomes
+    # optional. A jar that does not exist yet still needs a password to
+    # perform the login that will populate it.
+    have_cookies = bool(cookie_file) and os.path.isfile(cookie_file)
 
-    if not user:
+    if not have_cookies and not user:
         warn(f"error: no username; pass --user or set ${ENV_USER}")
         return 2
 
     prompt = None
-    if not args.no_prompt and sys.stdin.isatty():
+    if not args.no_prompt and sys.stdin.isatty() and not have_cookies:
         prompt = lambda: getpass.getpass(f"Fermilab password for {user}: ")
 
     try:
@@ -369,14 +409,18 @@ def main(argv=None) -> int:
         warn(f"error: {exc}")
         return 2
 
-    if not password:
+    if not password and not have_cookies:
         warn(
             f"error: no password; use --password, --password-env, "
-            f"${ENV_PASSWORD}, or a .env file"
+            f"${ENV_PASSWORD}, a .env file, or --cookie-file with a saved jar"
         )
         return 2
 
-    if ":" in password:
+    if password and not user:
+        warn(f"error: no username; pass --user or set ${ENV_USER}")
+        return 2
+
+    if password and ":" in password:
         # FermiSSOSession splits "user:pass" on every colon and unpacks the
         # result into two names, so an embedded colon raises ValueError in
         # its __init__. Report it here rather than as a traceback.
@@ -386,10 +430,26 @@ def main(argv=None) -> int:
     if debug:
         enable_debug()
 
-    session = FermiSSOSession(userpass=f"{user}:{password}")
+    session_kwargs = {}
+    if password:
+        session_kwargs["userpass"] = f"{user}:{password}"
+    if cookie_file:
+        session_kwargs["cookie_file"] = cookie_file
+        session_kwargs["cookie_format"] = cookie_format
+        session_kwargs["cookie_save"] = not args.no_save_cookies
+    try:
+        session = FermiSSOSession(**session_kwargs)
+    except (OSError, ValueError) as exc:
+        warn(f"error: cannot load cookie file {cookie_file}: {exc}")
+        return 2
 
     if not args.quiet:
-        warn(f"fetching {url} as {user}")
+        who = f"as {user}" if password else "with cookies only"
+        warn(f"fetching {url} {who}")
+        if cookie_file:
+            warn(
+                f"cookie file: {cookie_file} ({session.cookies_loaded} cookies loaded)"
+            )
 
     resp = session.get(url)
     ok, reasons = classify(session, resp, idp_host, args.expect)
@@ -401,6 +461,15 @@ def main(argv=None) -> int:
         warn(f"bytes     : {len(resp.text)}")
         warn(f"cookies   : {sorted(c.name for c in session.cookies)}")
         warn(f"redirects : {[h.status_code for h in resp.history]}")
+        if session.login_count:
+            saved = (
+                "saved to " + cookie_file
+                if cookie_file and session.cookie_save
+                else "not saved"
+            )
+            warn(f"login     : performed; cookies {saved}")
+        else:
+            warn("login     : not needed (existing cookies accepted)")
         warn("")
 
     if args.output:

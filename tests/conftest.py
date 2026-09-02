@@ -34,9 +34,7 @@ CHOOSE_PAGE = """<html>
 <input type="submit" value="Login"/>
 </form>
 </body></html>
-""".format(
-    resume=RESUME
-)
+""".format(resume=RESUME)
 
 LOGIN_PAGE = """<html>
 <head><base href="https://pingprod.fnal.gov/"/></head>
@@ -49,9 +47,7 @@ LOGIN_PAGE = """<html>
 <input type="hidden" name="pf.adapterId" id="pf.adapterId" value="FormBased" />
 </form>
 </body></html>
-""".format(
-    resume=RESUME
-)
+""".format(resume=RESUME)
 
 #: The IdP's auto-submitting SAML response form. Note lowercase method="post",
 #: which is why it does not collide with the login-page pattern.
@@ -63,9 +59,7 @@ POSTBACK_PAGE = """<html>
 <noscript><input type="submit" value="Continue"/></noscript>
 </form>
 </body></html>
-""".format(
-    sp=SP, target=TARGET
-)
+""".format(sp=SP, target=TARGET)
 
 FINAL_PAGE = """<html><head><title>Mu2e Document Database</title></head>
 <body><h1>DocDB Home</h1><p>Welcome, testuser.</p></body></html>
@@ -76,7 +70,36 @@ PLAIN_PAGE = """<html><head><title>Landing</title></head>
 """
 
 
-def make_response(request, text, status=200):
+#: Cookie the service provider sets once the SAML postback is accepted.
+SP_COOKIE = "mellon-cookie"
+
+
+class _FakeRaw:
+    """
+    Just enough of urllib3's HTTPResponse for requests to harvest cookies.
+
+    Session.send() calls extract_cookies_to_jar(jar, request, resp.raw), which
+    reads Set-Cookie headers from raw._original_response.msg. Giving the
+    fake response that attribute lets the scripted transport set cookies on
+    the real session jar without any sockets.
+    """
+
+    def __init__(self, set_cookies):
+        import http.client
+
+        msg = http.client.HTTPMessage()
+        for header in set_cookies:
+            msg["Set-Cookie"] = header
+        self._original_response = type("orig", (), {"msg": msg})()
+
+    def close(self):
+        pass
+
+    def release_conn(self):
+        pass
+
+
+def make_response(request, text, status=200, set_cookies=()):
     """Build a requests.Response the way an adapter would."""
     resp = requests.Response()
     resp.status_code = status
@@ -85,6 +108,8 @@ def make_response(request, text, status=200):
     resp.encoding = "utf-8"
     resp._content = text.encode("utf-8")
     resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    if set_cookies:
+        resp.raw = _FakeRaw(set_cookies)
     return resp
 
 
@@ -103,7 +128,12 @@ class ScriptedAdapter(HTTPAdapter):
 
     def send(self, request, **kwargs):
         self.calls.append(request)
-        return make_response(request, self.handler(request))
+        result = self.handler(request)
+        if isinstance(result, tuple):
+            text, set_cookies = result
+        else:
+            text, set_cookies = result, ()
+        return make_response(request, text, set_cookies=set_cookies)
 
     @property
     def urls(self):
@@ -119,18 +149,21 @@ def sso_handler(request):
     Serve the four-step Fermilab SSO sequence.
 
     target URL          -> choose-authentication page
+                           (or the protected page if the SP cookie is sent)
     resume URL + query  -> login form
     POST to resume URL  -> SAML postback form
-    POST to mellon      -> the protected page
+    POST to mellon      -> the protected page, and Set-Cookie of the SP cookie
     """
     url, method = request.url, request.method
     if url.startswith(SP + "/mellon/postResponse"):
-        return FINAL_PAGE
+        return FINAL_PAGE, [f"{SP_COOKIE}=sess-1; Path=/; Secure; HttpOnly"]
     if RESUME in url:
         if method == "POST":
             return POSTBACK_PAGE
         return LOGIN_PAGE
     if url.startswith(TARGET):
+        if SP_COOKIE + "=" in request.headers.get("Cookie", ""):
+            return FINAL_PAGE
         return CHOOSE_PAGE
     return PLAIN_PAGE
 

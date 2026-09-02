@@ -39,7 +39,10 @@ your GET  ->  service provider  ->  303 redirect to pingprod.fnal.gov
 There is no `login()` call. You construct the session with credentials and
 use it like any other `requests.Session`; the first request that hits a
 protected resource triggers the flow, and the resulting cookies make every
-later request go straight through.
+later request go straight through. Those cookies can also be saved to a file
+and loaded by a later process, or imported from a browser, so that the
+password step is skipped altogether; see [Reusing cookies instead of a
+password](#reusing-cookies-instead-of-a-password).
 
 ## Install
 
@@ -105,7 +108,9 @@ Four sources are supported. They resolve highest priority first:
 | 3 | env file | `FERMI_USER=` | `FERMI_PASSWORD=` |
 | 4 | default | `$USER` | interactive prompt |
 
-An environment variable set to the empty string counts as absent.
+An environment variable set to the empty string counts as absent. A fifth
+route, a saved cookie jar (`-c FILE`, `$FERMI_SSO_COOKIE_FILE`), makes both
+columns optional; it is covered in its own section below.
 
 ### Command line
 
@@ -180,7 +185,82 @@ working directory cannot change behavior.
 
 If nothing supplies a password and stdin is a terminal, you are prompted.
 Pass `-n` / `--no-prompt` to fail instead, which is what you want in
-automation. The prompt is skipped automatically when stdin is not a tty.
+automation. The prompt is skipped automatically when stdin is not a tty, and
+when a cookie file already exists (see the next section).
+
+## Reusing cookies instead of a password
+
+A completed login leaves session cookies for both the identity provider and
+the service provider in the session jar. Within one process those already
+make every request after the first free. `--cookie-file` (library:
+`cookie_file=`) extends that across processes: the jar is loaded before the
+first request and written back after each completed login.
+
+```bash
+# first run: password login, jar created
+fermi-sso-probe -u myaccount -c ~/.fermi_sso.cookies
+
+# every later run: no username, no password, no prompt
+fermi-sso-probe -c ~/.fermi_sso.cookies -n -q
+```
+
+Rules of the road:
+
+- **Existing jar, no password**: the cookies are tried alone. If the service
+  provider rejects them the probe fails with "the cookie file did not yield a
+  live session" and exit status 1. Nothing is written.
+- **Existing jar plus a password**: the cookies are tried first; if they are
+  stale the normal password login runs and the jar is rewritten. This is the
+  right combination for cron, with the password in a mode-600 env file.
+- **Jar that does not exist yet**: a password is required, and the login that
+  results creates the file.
+- **`--no-save-cookies`**: never rewrite the file. Use it with a browser
+  export you want to keep as-is.
+- The path can also come from `$FERMI_SSO_COOKIE_FILE` or a
+  `FERMI_SSO_COOKIE_FILE=` line in the env file, with the usual precedence.
+
+The probe's summary says which path was taken:
+
+```
+login     : not needed (existing cookies accepted)
+login     : performed; cookies saved to /home/me/.fermi_sso.cookies
+```
+
+### Using an MFA-enrolled account
+
+The library cannot drive a second factor, but a browser can. Log in to the
+service provider in the browser, export its cookies with any "cookies.txt"
+extension (Chrome: *Get cookies.txt LOCALLY*; Firefox: *cookies.txt*), and
+point the session at the export:
+
+```bash
+fermi-sso-probe -c ~/Downloads/mu2e-docdb.fnal.gov_cookies.txt --no-save-cookies -n
+```
+
+Export the cookies for the **service provider host** (`mu2e-docdb.fnal.gov`),
+not the identity provider; it is the application session cookie that grants
+access. The session lasts as long as the site allows, typically hours, and
+then the export must be redone.
+
+### File formats
+
+| Format | Detected by | Notes |
+|---|---|---|
+| Netscape `cookies.txt` | anything else | Default. What curl `-c`, wget, and browser export extensions write. HttpOnly cookies carry a `#HttpOnly_` domain prefix, which the library reads and writes itself because Python < 3.10's `MozillaCookieJar` treats those lines as comments and silently drops them. |
+| LWP | `.lwp` extension or `#LWP-Cookies-2.0` header | `http.cookiejar.LWPCookieJar` format. |
+| JSON | `.json` extension or a leading `[` / `{` | A list of `{name, value, domain, path, secure, httponly, host_only, expires}`. Also reads the `expirationDate` / `httpOnly` / `hostOnly` keys of the Cookie-Editor and EditThisCookie extensions. |
+
+Session cookies, which have no expiry, are written with expiry 0 rather than
+dropped, because the SSO cookies are exactly that kind. Expired cookies are
+skipped on both load and save.
+
+### Security of the jar
+
+The cookies are bearer credentials: anyone holding the file *is* you at that
+site until the session expires. The library creates the file mode 600 via a
+temporary file and atomic rename. Keep it on local disk, not in a shared
+home directory or a repository; the project `.gitignore` excludes
+`*.cookies` and `cookies.txt`.
 
 ## Verifying a login with fermi_sso_probe
 
@@ -245,6 +325,21 @@ if s.login_page_re.search(r.text):
 r2 = s.get("https://mu2e-docdb.fnal.gov/cgi-bin/DocDB/ShowDocument?docid=1234")
 ```
 
+To carry the login across processes, add `cookie_file`. With both a
+`userpass` and a `cookie_file`, the saved cookies are tried first and the
+password is only used, and the jar rewritten, if they have gone stale:
+
+```python
+s = FermiSSOSession(userpass=f"{user}:{password}", cookie_file="~/.fermi_sso.cookies")
+r = s.get(url)
+print("logged in" if s.login_count else "reused cookies")
+
+# cookies only, e.g. from a browser export of an MFA account
+s = FermiSSOSession(cookie_file="~/Downloads/cookies.txt", cookie_save=False)
+```
+
+`load_cookies(path)` and `save_cookies(path)` are also available directly.
+
 To reuse the probe's own check rather than writing your own:
 
 ```python
@@ -301,9 +396,19 @@ these fixtures are the place to update.
 
 Run with `-d` to see the full exchange. Diagnostics from the probe:
 
-**`still on the login form`** — the password was rejected, or the account
-requires MFA. See [Limitations](#limitations). Verify the password by logging
-in at <https://pingprod.fnal.gov/> in a browser.
+**`still on the login form -- wrong password, or the account requires MFA`**
+— the password was rejected, or the account requires MFA. See
+[Limitations](#limitations). Verify the password by logging in at
+<https://pingprod.fnal.gov/> in a browser.
+
+**`still on the login form -- the cookie file did not yield a live session`**
+— the run was cookies-only and the service provider started SSO over, which
+means the saved session has expired. Run again with a password to log in and
+refresh the jar, or re-export from the browser.
+
+**`cannot load cookie file`** — the file exists but is not parseable in the
+detected or requested format. Force it with `--cookie-format`, or check that
+a `.json` export is really JSON.
 
 **`still on the choose-authentication page`** — the IdP did not accept the
 password-adapter selection. The adapter id may have changed; the library
@@ -332,13 +437,19 @@ page to catch this.
 
 ## Limitations
 
-**MFA is not supported.** The library drives only the `ad..FormBased`
-adapter — the IdP's "a. Services Username and Password" option. There is no
-path for a second factor, so an account enrolled in MFA will loop back to the
-login form. Non-interactive scripts generally need a *service account*
-provisioned for password authentication; request one through the Service
-Desk. The DocDB landing page also links instructions for applying for
-DocDB access.
+**MFA is not supported in the login flow.** The library drives only the
+`ad..FormBased` adapter — the IdP's "a. Services Username and Password"
+option. There is no path for a second factor, so an account enrolled in MFA
+will loop back to the login form. Non-interactive scripts generally need a
+*service account* provisioned for password authentication; request one
+through the Service Desk. The DocDB landing page also links instructions for
+applying for DocDB access. The workaround is a browser login whose cookies
+are exported and reused; see [Reusing cookies instead of a
+password](#reusing-cookies-instead-of-a-password).
+
+**Saved cookies expire.** Cookie reuse lasts only as long as the service
+provider's session. The library has no way to know the lifetime up front
+and detects expiry only by being served the login page again.
 
 **Kerberos and certificate auth are not supported.** The IdP offers
 `ad..KrbOrForm`, `ad..KrbOrFormForWin`, and a CILogon certificate option;
