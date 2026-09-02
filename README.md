@@ -4,6 +4,7 @@
 This is a Session subclass for the Python requests library that will let scripts sign into Fermilab SSO with a user name and password, or with cookies saved from an earlier login.
 
 Basic theory:  If we go to fetch a page and get sent to the SSO pages, we choose password authentication and login and then go on to the page.
+Both the SAML (`/idp/`) and OIDC (`/as/`) flavours of the Fermilab PingFederate pages are handled, as is the confirmation form django-allauth puts in front of them.
 Non-interactive scripts would need to request a "special account" from the authentication folks for a username and password to pass.
 Alternatively the cookies from one successful login (including a browser login that passed MFA) can be saved to a file and reused until the site's session expires.
 

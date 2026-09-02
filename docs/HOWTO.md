@@ -22,10 +22,13 @@ every response is checked before you see it. If the response is part of the
 Fermilab PingFederate single sign-on sequence, the session answers it and
 keeps going, and you get the protected page back instead of a login form.
 
-The sequence it walks:
+The sequence it walks (the first step only on django-allauth sites, see
+[Django applications using allauth](#django-applications-using-allauth)):
 
 ```
-your GET  ->  service provider  ->  303 redirect to pingprod.fnal.gov
+your GET  ->  allauth "Sign in with SSO" confirmation form   (POST csrf token)
+                                          |
+              service provider  ->  30x redirect to pingprod.fnal.gov
                                           |
                                     choose-auth page      (pick "Services Username and Password")
                                           |
@@ -242,25 +245,40 @@ Verified 2026-09-02: a password login to `mu2e-shifts.fnal.gov` followed by a
 cookies-only request to `mu2e-talks.fnal.gov` landed on the Talks dashboard
 without ever seeing a login form.
 
-### Sites with their own confirmation step
+### Django applications using allauth
 
-Some applications put a page of their own in front of the IdP. Mu2eTalks
-(django-allauth) serves a "Sign In via SSO" page whose form has to be POSTed
-with its CSRF token before anything is redirected to pingprod. The library
-handles only the IdP's pages, so do that step yourself and let the session
-carry on from there:
+Several Fermilab Django apps (Mu2eTalks, SCD Activity Reporting) use
+django-allauth for Fermilab SSO. Their protected URLs redirect to a local
+sign-in *menu* at `/accounts/login/` with a "Log in with Fermilab SSO" link
+and a passkey form. The link goes to the allauth provider URL, e.g.
+`/accounts/oidc/keycloak/login/?next=%2F`, which serves a confirmation page
+whose form must be POSTed with its CSRF token before anything redirects to
+pingprod.
 
-```python
-import re
-start = "https://mu2e-talks.fnal.gov/accounts/oidc/keycloak/login/?next=%2F"
-r = s.get(start)
-token = re.search(r'name="csrfmiddlewaretoken" value="([^"]+)"', r.text).group(1)
-r = s.post(start, data={"csrfmiddlewaretoken": token}, headers={"Referer": start})
+The library handles that confirmation page. It is recognized only when all
+three hold:
+
+- the URL path matches `/accounts/.../login/`
+- the page has a `method="post"` form whose only fields are
+  `csrfmiddlewaretoken` and optionally `next`
+- that form posts back to the page's own URL
+
+The third rule matters. When you are already signed in, the site's nav bar
+adds a "Sign out" button, which is also a CSRF-only POST form, to
+`/accounts/logout/`. Without the rule the library submitted it and signed
+you out on every other run; that happened live on 2026-09-02 and is now a
+regression test.
+
+So for these sites, give the probe the SSO link's URL, not the site root:
+
+```bash
+fermi-sso-probe -c ~/.fermi_sso.cookies -x Dashboard \
+    "https://mu2e-talks.fnal.gov/accounts/oidc/keycloak/login/?next=%2F"
 ```
 
-The probe cannot perform that POST, so pointed at such a URL it reports
-"landed on an application sign-in page". Once the jar holds the site's own
-session cookie, a plain request to the site root works from the probe.
+Once the jar holds the site's session cookie, the site root works too.
+Pointed at the menu itself, the probe reports "landed on an application
+sign-in page".
 
 ### Using an MFA-enrolled account
 
@@ -310,7 +328,7 @@ The probe declares success only when all of these hold:
 - the final URL is off the identity provider host
 - the body matches none of the choose-auth, login-form, or postback patterns
 - the page title does not read as a sign-in page (a heuristic that catches
-  application-side login pages such as django-allauth's)
+  an application's own sign-in menu)
 - the `--expect` text is present, if given
 
 Common invocations:

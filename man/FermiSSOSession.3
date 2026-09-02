@@ -30,7 +30,26 @@ session object alive.
 .SS Flow
 The overridden
 .B send()
-recognizes and answers three pages, in order:
+recognizes and answers four pages, in order:
+.TP
+.B django\-allauth confirmation page
+Served by Django applications that use allauth for Fermilab SSO at
+.I /accounts/<provider>/login/
+or
+.IR /accounts/oidc/<id>/login/ :
+a
+.B method="post"
+form whose only field is
+.B csrfmiddlewaretoken
+(optionally also
+.BR next ),
+posting back to the page's own URL. The session posts it, with a
+same\-origin
+.B Referer
+for Django's CSRF check, and the application then redirects to the identity
+provider. Forms posting anywhere else, notably the site's own
+.I /accounts/logout/
+"Sign out" button, are never submitted.
 .TP
 .B Choose\-authentication page
 A form with
@@ -174,6 +193,14 @@ The identity provider adapter to select. Defaults to
 .B logging_in_already
 Recursion guard; true only while a login sequence is in progress.
 .TP
+.B allauth_url_re
+Pattern the response URL path must match before a page is considered an
+allauth confirmation page. Defaults to
+.BR ^/accounts/.+/login/?$ .
+.TP
+.B allauth_count
+Number of allauth confirmation forms this session has submitted.
+.TP
 .B cookie_file
 .TQ
 .B cookie_format
@@ -213,6 +240,16 @@ Absolute URL that selects password authentication, query string included.
 Returns
 .RI ( url ", " formdata )
 for the SAML postback form.
+.TP
+.BI is_allauth_sso_page( response )
+True when the response is an allauth confirmation page as defined under
+Flow.
+.TP
+.BI extract_allauth_form( response )
+Returns
+.RI ( url ", " formdata )
+for the confirmation form: the absolute URL it posts to and its hidden
+fields.
 .TP
 .BI load_cookies( path ", fmt=None, missing_ok=False)"
 Merge the cookies in
@@ -347,19 +384,15 @@ r = s.get("https://mu2e\-docdb.fnal.gov/cgi\-bin/sso/DocumentDatabase")
 .EE
 .RE
 .PP
-Some applications put a confirmation form of their own in front of the
-identity provider. django\-allauth, for instance, serves a "Sign In via SSO"
-page whose form must be POSTed with its CSRF token before the redirect to
-the IdP happens. The library handles only the IdP's pages, so drive that
-step yourself and let the session take over from there:
+Sign in to a Django application that uses allauth in front of Fermilab SSO.
+The application's own sign\-in page is a menu; fetch the "Log in with
+Fermilab SSO" link's URL and the session handles the confirmation form, the
+identity provider, and the callback:
 .PP
 .RS
 .EX
-import re
 start = "https://mu2e\-talks.fnal.gov/accounts/oidc/keycloak/login/?next=%2F"
-r = s.get(start)
-token = re.search(r'name="csrfmiddlewaretoken" value="([^"]+)"', r.text).group(1)
-r = s.post(start, data={"csrfmiddlewaretoken": token}, headers={"Referer": start})
+r = s.get(start)          # lands on the dashboard
 .EE
 .RE
 .SH LIMITATIONS

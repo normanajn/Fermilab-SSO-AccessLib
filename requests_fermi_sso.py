@@ -7,7 +7,9 @@ import re
 import sys
 import time
 import logging
-from typing import Iterable, List, Optional
+from html.parser import HTMLParser
+from typing import Dict, Iterable, List, Optional, Tuple
+from urllib.parse import urljoin, urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +83,15 @@ class FermiSSOSession(requests.Session):
         self.adapterid = "ad..FormBased"
         self.logging_in_already = False
 
+        # django-allauth puts a confirmation page in front of the IdP: the
+        # provider login URL (/accounts/<provider>/login/ or
+        # /accounts/oidc/<id>/login/) serves a form that must be POSTed with
+        # its CSRF token before the redirect to pingprod happens. Recognized
+        # by URL path plus a post form whose only fields are the CSRF token
+        # and optionally "next"; see is_allauth_sso_page().
+        self.allauth_url_re = re.compile(r"^/accounts/.+/login/?$")
+        self.allauth_count = 0
+
         self.cookie_file = kwargs.pop("cookie_file", None)
         if self.cookie_file:
             self.cookie_file = os.path.expanduser(self.cookie_file)
@@ -111,6 +122,16 @@ class FermiSSOSession(requests.Session):
         res = requests.Session.send(self, req, **send_kwargs)
         logger.debug(f"returning {res=}")
         performed_login = False
+
+        if self.is_allauth_sso_page(res):
+            self.logging_in_already = True
+            url, formdata = self.extract_allauth_form(res)
+            logger.debug(f"got allauth SSO confirmation page; posting to {url}")
+            # Django's CSRF check on HTTPS requires a same-origin Referer
+            res = requests.Session.post(
+                self, url, data=formdata, headers={"Referer": res.url}
+            )
+            self.allauth_count += 1
 
         m = self.choose_page_re.search(res.text)
         if m:
@@ -208,6 +229,55 @@ class FermiSSOSession(requests.Session):
         return base + m.group(1) + "?" + packed_form_data
 
     # ------------------------------------------------------------------
+    # django-allauth confirmation page
+    # ------------------------------------------------------------------
+
+    def is_allauth_sso_page(self, resp) -> bool:
+        """
+        True when resp is django-allauth's "continue to <provider>" page.
+
+        Requires an allauth provider-login URL path and a post form that
+        posts back to that same path (no action, or an action resolving to
+        it) whose only fields are csrfmiddlewaretoken (required) and next
+        (optional). The local /accounts/login/ page fails the form test: its
+        password or passkey form carries other fields. A site's "Sign out"
+        button -- also a CSRF-only post form, but to /accounts/logout/ -- is
+        excluded by the action test; submitting it would end the session.
+        """
+        if not self.allauth_url_re.search(urlsplit(resp.url).path):
+            return False
+        return self._allauth_form(resp) is not None
+
+    def extract_allauth_form(self, resp) -> Tuple[str, Dict[str, str]]:
+        """Return (absolute post URL, hidden field data) for the allauth form."""
+        form = self._allauth_form(resp)
+        if form is None:
+            raise ValueError("no allauth SSO form in response")
+        url, fields = form
+        return url, fields
+
+    @staticmethod
+    def _allauth_form(resp):
+        """(post URL, fields) of the self-posting CSRF-only form, or None."""
+        page_path = urlsplit(resp.url).path.rstrip("/")
+        for attrs, fields in _find_forms(resp.text):
+            if (attrs.get("method") or "").lower() != "post":
+                continue
+            names = set(fields)
+            if "csrfmiddlewaretoken" not in names or not names <= {
+                "csrfmiddlewaretoken",
+                "next",
+            }:
+                continue
+            action = attrs.get("action") or ""
+            url = urljoin(resp.url, action) if action else resp.url
+            if urlsplit(url).path.rstrip("/") != page_path:
+                logger.debug(f"ignoring CSRF-only form posting elsewhere: {action!r}")
+                continue
+            return url, fields
+        return None
+
+    # ------------------------------------------------------------------
     # cookie persistence
     # ------------------------------------------------------------------
 
@@ -298,6 +368,50 @@ class FermiSSOSession(requests.Session):
             raise
         logger.debug(f"saved {len(cookies)} cookies to {path} ({fmt})")
         return len(cookies)
+
+
+# ----------------------------------------------------------------------
+# minimal form scanner
+# ----------------------------------------------------------------------
+
+
+class _FormScanner(HTMLParser):
+    """Collect every <form> with its attributes and named input fields."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.forms: List[Tuple[Dict[str, str], Dict[str, str]]] = []
+        self._current = None
+
+    def handle_starttag(self, tag, attrs):
+        attrs = {k.lower(): (v if v is not None else "") for k, v in attrs}
+        if tag == "form":
+            self._current = (attrs, {})
+            self.forms.append(self._current)
+        elif tag in ("input", "select", "textarea") and self._current is not None:
+            name = attrs.get("name")
+            if name and (attrs.get("type") or "").lower() not in (
+                "submit",
+                "button",
+                "image",
+            ):
+                self._current[1][name] = attrs.get("value", "")
+
+    def handle_endtag(self, tag):
+        if tag == "form":
+            self._current = None
+
+
+def _find_forms(text: str):
+    """Return [(form attrs, {field name: value}), ...] for the page."""
+    scanner = _FormScanner()
+    try:
+        scanner.feed(text)
+        scanner.close()
+    except Exception as exc:  # malformed markup: treat as no forms
+        logger.debug(f"form scan failed: {exc}")
+        return []
+    return scanner.forms
 
 
 # ----------------------------------------------------------------------

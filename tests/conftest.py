@@ -77,6 +77,65 @@ OIDC_FINAL_PAGE = """<html><head><title>Mu2e Shift Scheduler</title></head>
 <body><h1>Shifts</h1><p>Signed in as testuser.</p></body></html>
 """
 
+#: django-allauth's provider confirmation page, trimmed from what
+#: mu2e-talks.fnal.gov served on 2026-09-02. The form has no action (posts to
+#: itself) and its only field is the CSRF token.
+ALLAUTH_SP = "https://mu2e-talks.fnal.gov"
+ALLAUTH_START = ALLAUTH_SP + "/accounts/oidc/keycloak/login/?next=%2F"
+ALLAUTH_TOKEN = "Zt4qXo7vN1kBw9cLmPfRe2sGh5jTuYaD8nHiVxCbQ0lKrOpMzWeFgSyAtIuJdLcE"
+ALLAUTH_PAGE = """<html>
+<head><title>Sign In via SSO \u2014 Mu2eTalks</title></head>
+<body>
+  <main>
+      <h1>Sign in with SSO</h1>
+      <p>You will be redirected to Fermilab SSO to complete sign-in.</p>
+      <form method="post">
+        <input type="hidden" name="csrfmiddlewaretoken" value="{token}">
+        <button type="submit" class="btn">
+          Continue to Fermilab SSO
+        </button>
+      </form>
+      <a href="/accounts/login/">&larr; Back to sign in</a>
+  </main>
+</body></html>
+""".format(token=ALLAUTH_TOKEN)
+
+#: The site's own sign-in menu at /accounts/login/: a passkey form with more
+#: fields than the CSRF token, which must never be auto-submitted.
+ALLAUTH_MENU_PAGE = """<html>
+<head><title>Sign In \u2014 Mu2eTalks</title></head>
+<body>
+<a href="/accounts/oidc/keycloak/login/?next=%2F">Log in with Fermilab SSO</a>
+<form id="mfa_login" action="/accounts/2fa/webauthn/login/" method="post">
+<input type="hidden" name="csrfmiddlewaretoken" value="{token}">
+<input type="hidden" name="next" value="/">
+<input type="hidden" name="credential">
+<button type="submit">Sign in with a passkey</button>
+</form>
+</body></html>
+""".format(token=ALLAUTH_TOKEN)
+
+#: The same confirmation page as served to a browser that is already signed
+#: in to the site: the base template's nav bar adds a "Sign out" button, a
+#: CSRF-only post form to /accounts/logout/, ahead of the SSO form. Submitting
+#: that one ends the session -- which is what the library did on 2026-09-02
+#: before the form's action was checked.
+ALLAUTH_SIGNED_IN_PAGE = ALLAUTH_PAGE.replace(
+    "<main>",
+    """<nav>
+  <span>Norman, Andrew J.</span>
+  <form method="post" action="/accounts/logout/">
+    <input type="hidden" name="csrfmiddlewaretoken" value="{token}">
+    <button type="submit">Sign out</button>
+  </form>
+</nav>
+<main>""".format(token=ALLAUTH_TOKEN),
+)
+
+ALLAUTH_FINAL_PAGE = """<html><head><title>Dashboard | Mu2eTalks</title></head>
+<body><h1>Dashboard</h1></body></html>
+"""
+
 FINAL_PAGE = """<html><head><title>Mu2e Document Database</title></head>
 <body><h1>DocDB Home</h1><p>Welcome, testuser.</p></body></html>
 """
@@ -228,4 +287,38 @@ def oidc_handler(request):
         return OIDC_LOGIN_PAGE
     if url.startswith(OIDC_TARGET):
         return OIDC_CHOOSE_PAGE
+    return PLAIN_PAGE
+
+
+def allauth_handler(request):
+    """
+    allauth site behind the OIDC IdP, no IdP session yet.
+
+    GET  provider login URL   -> confirmation page
+    POST provider login URL   -> IdP choose page (stands in for the 302s)
+    resume URL + query        -> login form
+    POST resume URL           -> the dashboard (stands in for the callback 302s)
+    GET  /accounts/login/     -> the site's own sign-in menu
+    """
+    url, method = request.url, request.method
+    if url.startswith(ALLAUTH_START):
+        if method == "POST":
+            return OIDC_CHOOSE_PAGE, ["csrftoken=abc; Path=/; Secure"]
+        return ALLAUTH_PAGE
+    if OIDC_RESUME in url:
+        if method == "POST":
+            return ALLAUTH_FINAL_PAGE, ["sessionid=s-1; Path=/; Secure; HttpOnly"]
+        return OIDC_LOGIN_PAGE
+    if url.startswith(ALLAUTH_SP + "/accounts/login/"):
+        return ALLAUTH_MENU_PAGE
+    return PLAIN_PAGE
+
+
+def allauth_sso_session_handler(request):
+    """allauth site when the jar already holds a live IdP session."""
+    url, method = request.url, request.method
+    if url.startswith(ALLAUTH_START):
+        if method == "POST":
+            return ALLAUTH_FINAL_PAGE, ["sessionid=s-2; Path=/; Secure; HttpOnly"]
+        return ALLAUTH_PAGE
     return PLAIN_PAGE
