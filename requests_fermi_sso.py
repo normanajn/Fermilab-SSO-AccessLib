@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 COOKIE_FORMATS = ("netscape", "lwp", "json")
 
 #: Authentication methods FermiSSOSession can drive at the identity provider.
-AUTH_METHODS = ("password", "kerberos")
+AUTH_METHODS = ("password", "kerberos", "yubikey")
 
 #: The IdP's password adapter, the same on every connection seen so far.
 PASSWORD_ADAPTER = "ad..FormBased"
@@ -30,6 +30,19 @@ PASSWORD_ADAPTER = "ad..FormBased"
 KERBEROS_ADAPTER_RE = re.compile(
     r"^ad\.\.(?!KrbOrFormForWin$)[^\"]*(krb|kerb)[^\"]*$", re.I
 )
+
+#: The hardware-token adapters (FNAL Yubikey, HSPD-12 badge) authenticate by
+#: client certificate on the IdP's mutual-TLS listener. Prefer the production
+#: Yubikey adapter over the test one; HSPD12 last.
+YUBIKEY_ADAPTER_ORDER = (
+    re.compile(r"^ad\.\.FNALYubikey$", re.I),
+    re.compile(r"^ad\.\..*yubikey.*$", re.I),
+    re.compile(r"^ad\.\.FNALHSPD12$", re.I),
+)
+
+#: Redirect targets handed to the certificate hop instead of being followed:
+#: the IdP's mutual-TLS listener, which lives on its own port.
+MTLS_LOCATION_RE = re.compile(r"^https://[^/]+:9032/", re.I)
 
 _NETSCAPE_HEADER = "# Netscape HTTP Cookie File"
 _LWP_HEADER = "#LWP-Cookies-2.0"
@@ -61,12 +74,19 @@ class FermiSSOSession(requests.Session):
         requests.Session):
 
         userpass       "user:password" for the IdP's password adapter
-        auth_method    "password" (default) or "kerberos". Kerberos selects
-                       the IdP's Kerberos adapter on the choose page and
-                       answers its SPNEGO (Negotiate) challenge from the
-                       local ticket cache via requests-gssapi
+        auth_method    "password" (default), "kerberos", or "yubikey".
+                       Kerberos selects the IdP's Kerberos adapter on the
+                       choose page and answers its SPNEGO (Negotiate)
+                       challenge from the local ticket cache via
+                       requests-gssapi. Yubikey selects the hardware-token
+                       adapter and performs the mutual-TLS request it
+                       redirects to through cert_hop
         spnego_auth    a requests auth handler to use for the Negotiate
                        challenge instead of requests_gssapi.HTTPSPNEGOAuth
+        cert_hop       callable(url, prepared_request) -> HopResponse that
+                       performs one GET with a client certificate Python's
+                       TLS stack cannot present (a smart-card key). Required
+                       for auth_method="yubikey"; see fermi_sso_yubikey
         cookie_file    path of a cookie jar to load before the first request;
                        missing files are ignored so a first run can create it
         cookie_format  "netscape", "lwp", "json", or None to auto-detect
@@ -114,6 +134,15 @@ class FermiSSOSession(requests.Session):
                 f"auth_method must be one of {AUTH_METHODS}, not {self.auth_method!r}"
             )
         spnego_auth = kwargs.pop("spnego_auth", None)
+        self.cert_hop = kwargs.pop("cert_hop", None)
+        if self.auth_method == "yubikey" and self.cert_hop is None:
+            raise ValueError(
+                "auth_method='yubikey' needs cert_hop, e.g. "
+                "fermi_sso_yubikey.YubiKeyCertHop()"
+            )
+        #: Redirects matching this are performed by cert_hop, not followed.
+        self.mtls_location_re = MTLS_LOCATION_RE
+        self.cert_hop_count = 0
         #: Adapter selected on the choose page for password authentication.
         self.adapterid = PASSWORD_ADAPTER
         #: Pattern picking the Kerberos adapter out of the choose page's options.
@@ -207,7 +236,20 @@ class FermiSSOSession(requests.Session):
             # got choose_auth page...
             url = self.extract_chose_url(res)
             logger.debug(f"trying to choose by calling {url} ")
-            res = requests.Session.get(self, url)
+            if self.auth_method == "yubikey":
+                res = self._select_with_cert_hop(url)
+                # a denied hop comes back as the application's error page,
+                # which is a 200; the OAuth error lives in the redirect URL
+                denied = any("error=" in h.url for h in list(res.history) + [res])
+                if not (
+                    denied
+                    or res.status_code >= 400
+                    or self.choose_page_re.search(res.text)
+                    or self.login_page_re.search(res.text)
+                ):
+                    performed_login = True
+            else:
+                res = requests.Session.get(self, url)
             for resp in res.history:
                 logger.debug(f"history_item:{resp.status_code}: {resp.text}")
             if self.auth_method == "kerberos":
@@ -302,21 +344,71 @@ class FermiSSOSession(requests.Session):
 
         Password: self.adapterid (ad..FormBased). Kerberos: the first
         <option> whose value matches kerberos_adapter_re, since the id
-        differs between the IdP's SAML and OIDC connections. If the page
-        offers no Kerberos option the password adapter is used instead, with
-        a warning, so a site without Kerberos still logs in when a password
-        was also supplied.
+        differs between the IdP's SAML and OIDC connections. Yubikey: the
+        best hardware-token option per YUBIKEY_ADAPTER_ORDER. If the page
+        offers no option for the method, the password adapter is used
+        instead, with a warning, so a site without it still logs in when a
+        password was also supplied.
         """
-        if self.auth_method != "kerberos":
+        if self.auth_method == "password":
             return self.adapterid
         options = re.findall(r'<option[^>]*value="([^"]*)"', resp.text)
-        for value in options:
-            if self.kerberos_adapter_re.search(value):
-                return value
+        if self.auth_method == "kerberos":
+            for value in options:
+                if self.kerberos_adapter_re.search(value):
+                    return value
+        elif self.auth_method == "yubikey":
+            for pattern in YUBIKEY_ADAPTER_ORDER:
+                for value in options:
+                    if pattern.search(value):
+                        return value
         logger.warning(
-            f"no Kerberos adapter among {options}; falling back to {self.adapterid}"
+            f"no {self.auth_method} adapter among {options}; "
+            f"falling back to {self.adapterid}"
         )
         return self.adapterid
+
+    # ------------------------------------------------------------------
+    # certificate hop (hardware token on the IdP's mutual-TLS listener)
+    # ------------------------------------------------------------------
+
+    def _select_with_cert_hop(self, url):
+        """
+        Select the adapter without following redirects; if the IdP answers
+        with a redirect to its mutual-TLS listener, perform that one request
+        through cert_hop, absorb its cookies, and continue from its
+        redirect. Anything else is returned as requests would have.
+        """
+        res = requests.Session.get(self, url, allow_redirects=False)
+        location = res.headers.get("Location", "")
+        if not (res.is_redirect and self.mtls_location_re.search(location)):
+            if res.is_redirect:
+                return requests.Session.get(self, urljoin(url, location))
+            return res
+        hop_url = urljoin(url, location)
+        prepared = self.prepare_request(requests.Request("GET", hop_url))
+        logger.debug(f"certificate hop to {hop_url.split('?')[0]}")
+        hop = self.cert_hop(hop_url, prepared)
+        self.cert_hop_count += 1
+        self._absorb_hop_cookies(hop, prepared)
+        hop_res = _hop_to_response(hop, hop_url, prepared)
+        if hop.status in (301, 302, 303, 307, 308) and hop.headers.get("location"):
+            next_url = urljoin(hop_url, hop.headers["location"])
+            logger.debug(f"certificate hop redirects to {next_url.split('?')[0]}")
+            res = requests.Session.get(self, next_url)
+            res.history.insert(0, hop_res)
+            return res
+        return hop_res
+
+    def _absorb_hop_cookies(self, hop, prepared):
+        """Feed the hop's Set-Cookie headers into the session jar."""
+        import http.client
+        from requests.cookies import MockRequest, MockResponse
+
+        msg = http.client.HTTPMessage()
+        for value in hop.set_cookies:
+            msg["Set-Cookie"] = value
+        self.cookies.extract_cookies(MockResponse(msg), MockRequest(prepared))
 
     def extract_chose_url(self, resp):
         """return form data to send to the Pick Authentication Method form"""
@@ -505,6 +597,42 @@ class FermiSSOSession(requests.Session):
             raise
         logger.debug(f"saved {len(cookies)} cookies to {path} ({fmt})")
         return len(cookies)
+
+
+# ----------------------------------------------------------------------
+# certificate hop result
+# ----------------------------------------------------------------------
+
+
+class HopResponse:
+    """
+    What a cert_hop callable returns: the raw result of one HTTPS request
+    made outside requests. headers has lower-cased names and keeps the last
+    value of a repeated header; set_cookies keeps every Set-Cookie value.
+    """
+
+    def __init__(
+        self, status: int, headers: Dict[str, str], body: bytes, set_cookies=()
+    ):
+        self.status = int(status)
+        self.headers = {k.lower(): v for k, v in headers.items()}
+        self.body = body or b""
+        self.set_cookies = list(set_cookies)
+
+    def __repr__(self):
+        return f"HopResponse({self.status}, location={self.headers.get('location')!r})"
+
+
+def _hop_to_response(hop: HopResponse, url: str, prepared) -> requests.Response:
+    """Wrap a HopResponse as a requests.Response so callers see one shape."""
+    resp = requests.Response()
+    resp.status_code = hop.status
+    resp.url = url
+    resp.request = prepared
+    resp.headers.update(hop.headers)
+    resp._content = hop.body
+    resp.encoding = "utf-8"
+    return resp
 
 
 # ----------------------------------------------------------------------

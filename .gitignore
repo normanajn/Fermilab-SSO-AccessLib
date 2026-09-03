@@ -9,6 +9,7 @@
 *.cookies.json
 *.cookies.lwp
 cookies.txt
+*.pin
 
 # Python virtual environment
 venv/

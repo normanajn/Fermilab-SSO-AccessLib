@@ -197,4 +197,4 @@ def test_probe_kerberos_needs_no_password(monkeypatch, tmp_path, capsys):
 def test_probe_rejects_bad_auth_env(monkeypatch, capsys):
     monkeypatch.setenv(probe.ENV_AUTH, "carrier-pigeon")
     assert probe.main(["--no-env-file", "-n", "-u", "u", "-p", "p", TARGET]) == 2
-    assert "must be password or kerberos" in capsys.readouterr().err
+    assert "must be password, kerberos, or yubikey" in capsys.readouterr().err

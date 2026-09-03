@@ -450,3 +450,62 @@ def kerberos_handler(request):
             return FINAL_PAGE
         return CHOOSE_PAGE
     return PLAIN_PAGE
+
+
+MTLS_RESUME = "https://pingprod.fnal.gov:9032/as/Krb1/resume/as/authorization.ping"
+OIDC_CALLBACK = OIDC_SP + "/oidc/callback?code=abc&state=xyz"
+
+
+def yubikey_handler(request):
+    """
+    OIDC connection with the FNAL Yubikey adapter.
+
+    login/oidc                    -> choose page (OIDC options incl. FNALYubikey)
+    resume + FNALYubikey          -> 302 to the mutual-TLS listener (port 9032)
+    resume + FormBased            -> login form
+    /oidc/callback?code=...       -> the protected page, sets the app cookie
+    anything on :9032             -> must never be requested by requests itself
+    """
+    url = request.url
+    if url.startswith("https://pingprod.fnal.gov:9032/"):
+        raise AssertionError(
+            "the mutual-TLS URL was requested directly instead of via cert_hop"
+        )
+    if OIDC_RESUME in url:
+        if "pfidpadapterid=ad..FNALYubikey" in url:
+            return "", [], 302, {"Location": MTLS_RESUME}
+        if "pfidpadapterid=ad..FormBased" in url:
+            return OIDC_LOGIN_PAGE
+    if url.startswith(OIDC_SP + "/oidc/callback"):
+        return OIDC_FINAL_PAGE, ["session=yk-1; Path=/; Secure; HttpOnly"]
+    if url.startswith(OIDC_TARGET):
+        if "session=" in request.headers.get("Cookie", ""):
+            return OIDC_FINAL_PAGE
+        return OIDC_CHOOSE_PAGE.replace(
+            '<option value="ad..CILogonCert">CILogonCert Only</option>',
+            '<option value="ad..CILogonCert">CILogonCert Only</option>\n'
+            '<option value="ad..FNALYubikey">FNAL Yubikey</option>\n'
+            '<option value="ad..YubikeyTest">Yubikey</option>',
+        )
+    return PLAIN_PAGE
+
+
+class FakeCertHop:
+    """Stand-in for fermi_sso_yubikey.YubiKeyCertHop: records the call, returns a scripted hop."""
+
+    def __init__(
+        self,
+        status=302,
+        location=OIDC_CALLBACK,
+        set_cookies=("PF=after-cert; Path=/; Secure; HttpOnly",),
+        body=b"",
+    ):
+        from requests_fermi_sso import HopResponse
+
+        headers = {"Location": location} if location else {}
+        self.response = HopResponse(status, headers, body, set_cookies)
+        self.calls = []
+
+    def __call__(self, url, prepared):
+        self.calls.append((url, dict(prepared.headers)))
+        return self.response

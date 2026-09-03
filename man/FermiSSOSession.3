@@ -10,6 +10,7 @@ FermiSSOSession \- requests.Session subclass that logs into Fermilab SSO
 .sp
 .BI "s = FermiSSOSession(cookie_file=\(dq" PATH \(dq)
 .B "s = FermiSSOSession(auth_method=\(dqkerberos\(dq)"
+.B "s = FermiSSOSession(auth_method=\(dqyubikey\(dq, cert_hop=YubiKeyCertHop())"
 .BI "n = s.load_cookies(" PATH ", fmt=None, missing_ok=False)"
 .BI "n = s.save_cookies(" PATH ", fmt=None)"
 .EE
@@ -172,6 +173,26 @@ Kerberos support needs the
 package (extra
 .BR kerberos ):
 .B pip install 'requests\-fermi_sso[kerberos]'
+.PP
+.B auth_method="yubikey"
+selects the hardware\-token adapter (FNAL Yubikey, then any Yubikey, then
+HSPD\-12) on the choose page. The identity provider answers with a redirect
+to its mutual\-TLS listener on port 9032 (matched by
+.BR mtls_location_re ).
+That redirect is not followed by
+.BR requests ;
+it is handed to the
+.B cert_hop
+callable, which performs the one request with the token's certificate and
+returns a
+.BR HopResponse .
+The session absorbs its Set\-Cookie headers and follows its redirect back to
+the application. See
+.BR fermi_sso_yubikey (3)
+for the openssl\-based hop and its requirements. A refused certificate comes
+back as the application's error page with
+.B error=access_denied
+in the redirect; that is not counted as a login.
 .SS Cookie reuse
 Every cookie the identity provider and service provider set during a login
 lives in the session jar, so within one process only the first request pays
@@ -190,7 +211,7 @@ cookies are bearer credentials; the file is written mode 0600 and should be
 treated like a password.
 .SH CONSTRUCTOR
 .TP
-.BI FermiSSOSession( "\fR...\fP" ", userpass=" STRING ", auth_method=" NAME ", spnego_auth=" HANDLER ", cookie_file=" PATH ", cookie_format=" FMT ", cookie_save=" BOOL )
+.BI FermiSSOSession( "\fR...\fP" ", userpass=" STRING ", auth_method=" NAME ", spnego_auth=" HANDLER ", cert_hop=" CALLABLE ", cookie_file=" PATH ", cookie_format=" FMT ", cookie_save=" BOOL )
 The keywords below are consumed; all other arguments are passed to
 .BR requests.Session .
 .RS
@@ -201,11 +222,16 @@ Split on
 into a username and password for the identity provider's password adapter.
 .TP
 .B auth_method
-.B password
-(default) or
-.BR kerberos .
+.BR password " (default), " kerberos ", or " yubikey .
 Anything else raises
 .BR ValueError .
+.TP
+.B cert_hop
+Callable
+.RI ( url ", " prepared_request ") -> " HopResponse
+that performs one GET with a client certificate Python cannot present.
+Required for
+.BR yubikey .
 .TP
 .B spnego_auth
 A requests auth handler to attach for
@@ -298,6 +324,13 @@ Number of allauth confirmation forms this session has submitted.
 .B authn_request_count
 Number of SAML AuthnRequest forms this session has submitted.
 .TP
+.B mtls_location_re
+.TQ
+.B cert_hop_count
+Pattern for redirects handed to
+.B cert_hop
+(default: any https URL on port 9032), and how many hops were made.
+.TP
 .B cookie_file
 .TQ
 .B cookie_format
@@ -384,6 +417,19 @@ would. With
 .I fmt
 .B None
 the format follows the extension, defaulting to Netscape.
+.SH HOPRESPONSE
+.B HopResponse(status, headers, body, set_cookies=())
+is what a
+.B cert_hop
+returns:
+.B status
+(int),
+.B headers
+(dict, lower\-cased names, last value of a repeated header),
+.B body
+(bytes), and
+.B set_cookies
+(every Set\-Cookie value, in order).
 .SH COOKIE FILE FORMATS
 .TP
 .B netscape

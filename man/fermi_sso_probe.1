@@ -95,18 +95,32 @@ in the working directory cannot change the result.
 .TP
 .BI \-a " METHOD" "\fR, \fP" \-\-auth " METHOD"
 Authentication method at the identity provider:
-.B password
-(default) or
-.BR kerberos .
+.BR password " (default), " kerberos ", or " yubikey .
 With
 .B kerberos
 the local ticket cache answers the identity provider's Negotiate challenge
 through
-.B requests\-gssapi
-and no username or password is required; a password supplied as well is the
-fallback on a connection that offers no Kerberos adapter. See
-.BR FermiSSOSession (3),
-AUTHENTICATION METHODS.
+.BR requests\-gssapi .
+With
+.B yubikey
+the certificate in the token's PIV slot answers the identity provider's
+mutual\-TLS request through
+.B openssl
+and the pkcs11 engine; openssl prompts for the PIN on the terminal, so run
+this from a real terminal or give
+.BR \-\-pin\-source .
+Neither needs a username or password; a password supplied as well is the
+fallback on a connection that offers no such adapter. See
+.BR FermiSSOSession (3)
+and
+.BR fermi_sso_yubikey (3).
+.TP
+.BI \-\-pin\-source " FILE"
+With
+.BR "\-\-auth yubikey" ,
+read the PIV PIN from
+.I FILE
+(mode 600) instead of prompting.
 .TP
 .BI \-c " FILE" "\fR, \fP" \-\-cookie\-file " FILE"
 Load cookies from
@@ -223,6 +237,10 @@ Path to the env file, overriding the default search.
 Default authentication method, as for
 .BR \-\-auth .
 .TP
+.B FERMI_SSO_PIN_SOURCE
+Default PIN file, as for
+.BR \-\-pin\-source .
+.TP
 .B FERMI_SSO_COOKIE_FILE
 Default cookie jar path, as for
 .BR \-\-cookie\-file .
@@ -291,6 +309,14 @@ Probe a different SSO\-protected site and require known text on the page:
 .RS
 .EX
 fermi_sso_probe \-u myaccount \-x "Welcome" https://example.fnal.gov/private
+.EE
+.RE
+.PP
+Log in with the YubiKey, from a terminal so openssl can ask for the PIN:
+.PP
+.RS
+.EX
+fermi_sso_probe \-a yubikey \-c ~/.fermi_sso.cookies https://mu2e\-shifts.fnal.gov/login/oidc?next=/
 .EE
 .RE
 .PP
@@ -368,6 +394,17 @@ then try
 .B kgetcred HTTP/pingprod.fnal.gov@FERMI.WIN.FNAL.GOV
 directly; "Clients credentials have been revoked" from that realm is an
 account\-state problem on the Windows side, not a ticket problem.
+.TP
+.B the identity provider sent the application 'access_denied'
+The selected adapter refused. For
+.B \-\-auth yubikey
+this means the TLS handshake on port 9032 did not present an accepted
+certificate: the hop failed, or the account is not enrolled for the token.
+.TP
+.B yubikey prerequisite missing
+A tool the hop needs is absent; run
+.BR fermi_sso_yubikey (3)
+for the full report.
 .TP
 .B the identity provider is throttling sign\-ons
 PingFederate served its "Multiple Sign\-On Delay" page: too many sign\-on

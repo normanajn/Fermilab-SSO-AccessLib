@@ -237,6 +237,54 @@ instead gives `LOOKING_UP_SERVER`, because it does not exist there. The
 library and probe paths were verified against a scripted IdP that issues the
 same challenge; the live path is blocked until that account state is fixed.
 
+## Logging in with a YubiKey
+
+The "FNAL Yubikey" and "HSPD12" options on the OIDC connection are
+certificate authentication: after the adapter is selected, the IdP redirects
+to a mutual-TLS listener on `pingprod.fnal.gov:9032` that asks for a client
+certificate, and the certificate is the one in the YubiKey's PIV
+authentication slot (9A, issued by FERMI Sub CA 01). Its key never leaves the
+token, so Python cannot present it. `auth_method="yubikey"` (probe:
+`--auth yubikey`) therefore hands that one request to `fermi_sso_yubikey`,
+which runs `openssl s_client` with the PKCS#11 engine and feeds the result
+back into the session.
+
+Setup on macOS, once:
+
+```bash
+brew install openssl@3 libp11 yubico-piv-tool opensc ykman
+fermi-sso-yubikey            # readiness report; prints the openssl command
+```
+
+Then, **from a real terminal** because openssl prompts for the PIV PIN:
+
+```bash
+fermi-sso-probe -a yubikey -c ~/.fermi_sso.cookies "https://mu2e-shifts.fnal.gov/login/oidc?next=/"
+```
+
+Or put the PIN in a mode-600 file and pass `--pin-source FILE`
+(`FERMI_SSO_PIN_SOURCE=`), which also works where there is no terminal.
+Once the jar holds the site's session, later runs are cookies-only as usual.
+
+```python
+from fermi_sso_yubikey import YubiKeyCertHop
+s = FermiSSOSession(auth_method="yubikey", cert_hop=YubiKeyCertHop(), cookie_file="~/.fermi_sso.cookies")
+```
+
+Verified live 2026-09-02 against the Mu2e shift scheduler: with an empty jar
+and no password, the probe prompted for the PIN once, the IdP accepted the
+certificate, and the run landed on the calendar with the jar written.
+
+Notes:
+
+- The SAML connection (DocDB) does not offer the Yubikey adapter at all;
+  a password or Kerberos login there, then cookie reuse, is the route.
+- A refused certificate shows up as the application's login page with an
+  error banner; the probe reports "the identity provider sent the
+  application 'access_denied'".
+- Wrong PINs count against the token's retry limit (`ykman piv info` shows
+  it). Check the readiness report before trying.
+
 ## Reusing cookies instead of a password
 
 A completed login leaves session cookies for both the identity provider and
@@ -600,9 +648,11 @@ password](#reusing-cookies-instead-of-a-password).
 provider's session. The library has no way to know the lifetime up front
 and detects expiry only by being served the login page again.
 
-**Certificate auth is not supported.** The IdP offers CILogon certificate
-adapters; this package selects none of them. Kerberos is supported, see
-[Logging in with a Kerberos ticket](#logging-in-with-a-kerberos-ticket).
+**File-based certificate auth is not supported.** The IdP offers CILogon
+certificate adapters; this package selects none of them. The YubiKey's PIV
+certificate is supported through the openssl hop, see
+[Logging in with a YubiKey](#logging-in-with-a-yubikey); Kerberos is
+supported too.
 
 **JavaScript redirects are not followed.** Workday and ServiceNow both
 interpose a page whose only job is a `window.location` assignment. Give the

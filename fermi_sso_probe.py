@@ -55,6 +55,7 @@ ENV_DEBUG = "FERMI_SSO_DEBUG"
 ENV_ENV_FILE = "FERMI_SSO_ENV_FILE"
 ENV_COOKIE_FILE = "FERMI_SSO_COOKIE_FILE"
 ENV_AUTH = "FERMI_SSO_AUTH"
+ENV_PIN_SOURCE = "FERMI_SSO_PIN_SOURCE"
 ENV_COOKIE_FORMAT = "FERMI_SSO_COOKIE_FORMAT"
 
 
@@ -258,6 +259,13 @@ def classify(
             )
     if session.postback_form_re.search(resp.text):
         reasons.append("stopped on the SAML postback form; it was not submitted")
+    denied = [h for h in list(resp.history) + [resp] if "error=access_denied" in h.url]
+    if denied:
+        reasons.append(
+            "the identity provider sent the application 'access_denied': the "
+            "selected adapter refused to authenticate (for a hardware-token "
+            "adapter, the client certificate was not presented or not accepted)"
+        )
     if (
         resp.status_code == 401
         and "negotiate" in resp.headers.get("WWW-Authenticate", "").lower()
@@ -347,11 +355,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-a",
         "--auth",
-        choices=("password", "kerberos"),
+        choices=("password", "kerberos", "yubikey"),
         default=None,
         help=f"authentication method at the identity provider (${ENV_AUTH}; "
         f"default password). kerberos uses the local ticket cache via "
-        f"requests-gssapi and needs no password",
+        f"requests-gssapi; yubikey uses the PIV certificate on the token via "
+        f"openssl and the pkcs11 engine (see fermi_sso_yubikey(3)). Neither "
+        f"needs a password",
+    )
+    parser.add_argument(
+        "--pin-source",
+        metavar="FILE",
+        default=None,
+        help=f"with --auth yubikey: read the PIV PIN from FILE (mode 600) instead "
+        f"of letting openssl prompt on the terminal (${ENV_PIN_SOURCE})",
     )
     parser.add_argument(
         "-c",
@@ -456,11 +473,15 @@ def main(argv=None) -> int:
     # perform the login that will populate it.
     have_cookies = bool(cookie_file) and os.path.isfile(cookie_file)
     auth_method = resolve(args.auth, ENV_AUTH, environ, dotenv, "password")
-    if auth_method not in ("password", "kerberos"):
-        warn(f"error: ${ENV_AUTH} must be password or kerberos, not {auth_method!r}")
+    if auth_method not in ("password", "kerberos", "yubikey"):
+        warn(
+            f"error: ${ENV_AUTH} must be password, kerberos, or yubikey, "
+            f"not {auth_method!r}"
+        )
         return 2
-    # Kerberos, like an existing jar, makes the password optional
-    password_optional = have_cookies or auth_method == "kerberos"
+    pin_source = resolve(args.pin_source, ENV_PIN_SOURCE, environ, dotenv)
+    # Kerberos and the YubiKey, like an existing jar, make the password optional
+    password_optional = have_cookies or auth_method in ("kerberos", "yubikey")
 
     if not password_optional and not user:
         warn(f"error: no username; pass --user or set ${ENV_USER}")
@@ -499,6 +520,19 @@ def main(argv=None) -> int:
         enable_debug()
 
     session_kwargs = {"auth_method": auth_method}
+    if auth_method == "yubikey":
+        from fermi_sso_yubikey import YubiKeyCertHop
+
+        hop = YubiKeyCertHop(
+            pin_source=os.path.expanduser(pin_source) if pin_source else None
+        )
+        failed = [(w, d) for w, ok, d in hop.check() if not ok]
+        if failed:
+            for what, detail in failed:
+                warn(f"error: yubikey prerequisite missing: {what}: {detail}")
+            warn("run fermi-sso-yubikey for the full readiness report")
+            return 2
+        session_kwargs["cert_hop"] = hop
     if password:
         session_kwargs["userpass"] = f"{user}:{password}"
     if cookie_file:
@@ -517,6 +551,10 @@ def main(argv=None) -> int:
     if not args.quiet:
         if auth_method == "kerberos":
             who = "with Kerberos" + (
+                f" (password fallback as {user})" if password else ""
+            )
+        elif auth_method == "yubikey":
+            who = "with the YubiKey certificate" + (
                 f" (password fallback as {user})" if password else ""
             )
         else:
