@@ -76,6 +76,13 @@ class FermiSSOSession(requests.Session):
             '<form.*method="POST".*action="(/(?:idp|as)/[^"]*)".*>'
         )
         self.base_re = re.compile('<base href="(.*)/"/>')
+        # PingFederate throttles repeated sign-ons with a "Multiple Sign-On
+        # Delay" page. It carries a GET form with pfidpadapterid, so it would
+        # otherwise pass for the choose page and each automatic re-selection
+        # would count as another attempt.
+        self.delay_page_re = re.compile(
+            r"<title>\s*Multiple Sign-On Delay\s*</title>", re.I
+        )
         self.postback_form_re = re.compile(
             '<form.*method="post".*action="([^"]*)".*>.*<input.*name="RelayState" *value="([^"]*)".*<input.*name="SAMLResponse" *value="([^"]*)"',
             flags=re.S,
@@ -91,6 +98,11 @@ class FermiSSOSession(requests.Session):
         # and optionally "next"; see is_allauth_sso_page().
         self.allauth_url_re = re.compile(r"^/accounts/.+/login/?$")
         self.allauth_count = 0
+
+        # Service providers that use the SAML HTTP-POST binding towards the
+        # IdP (Workday, for one) hand the browser an auto-submitting form
+        # carrying SAMLRequest. Count of those submitted here.
+        self.authn_request_count = 0
 
         self.cookie_file = kwargs.pop("cookie_file", None)
         if self.cookie_file:
@@ -132,6 +144,24 @@ class FermiSSOSession(requests.Session):
                 self, url, data=formdata, headers={"Referer": res.url}
             )
             self.allauth_count += 1
+
+        if self.is_saml_request_page(res):
+            # SP -> IdP AuthnRequest by HTTP-POST binding: submit it and carry
+            # on with whatever the IdP answers (choose page, login form, or a
+            # SAMLResponse postback straight back if the IdP session is live)
+            self.logging_in_already = True
+            url, formdata = self.extract_saml_request_form(res)
+            logger.debug(f"got SAML AuthnRequest form; posting to {url}")
+            res = requests.Session.post(self, url, data=formdata)
+            self.authn_request_count += 1
+
+        if self.delay_page_re.search(res.text):
+            logger.warning(
+                "identity provider is throttling sign-ons (Multiple Sign-On "
+                "Delay); returning that page unanswered"
+            )
+            self.logging_in_already = False
+            return res
 
         m = self.choose_page_re.search(res.text)
         if m:
@@ -279,6 +309,35 @@ class FermiSSOSession(requests.Session):
                 logger.debug(f"ignoring CSRF-only form posting elsewhere: {action!r}")
                 continue
             return url, fields
+        return None
+
+    # ------------------------------------------------------------------
+    # SAML AuthnRequest (SP -> IdP, HTTP-POST binding)
+    # ------------------------------------------------------------------
+
+    def is_saml_request_page(self, resp) -> bool:
+        """
+        True when resp is a service provider's auto-submitting AuthnRequest
+        form: a post form with a SAMLRequest field and no SAMLResponse.
+        """
+        return self._saml_request_form(resp) is not None
+
+    def extract_saml_request_form(self, resp) -> Tuple[str, Dict[str, str]]:
+        """Return (absolute IdP URL, all hidden fields) for the AuthnRequest form."""
+        form = self._saml_request_form(resp)
+        if form is None:
+            raise ValueError("no SAML AuthnRequest form in response")
+        return form
+
+    @staticmethod
+    def _saml_request_form(resp):
+        for attrs, fields in _find_forms(resp.text):
+            if (attrs.get("method") or "").lower() != "post":
+                continue
+            if "SAMLRequest" in fields and "SAMLResponse" not in fields:
+                action = attrs.get("action") or ""
+                url = urljoin(resp.url, action) if action else resp.url
+                return url, fields
         return None
 
     # ------------------------------------------------------------------

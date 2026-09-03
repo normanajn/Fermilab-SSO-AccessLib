@@ -29,6 +29,8 @@ SAML postback patterns
 .IP \(bu 3
 the page title does not read as a sign\-in page
 .IP \(bu 3
+the body is not the identity provider's SecurID second\-factor form
+.IP \(bu 3
 the text given to
 .B \-\-expect
 is present, if that option was used
@@ -325,6 +327,16 @@ authentication. See LIMITATIONS.
 The run was cookies\-only and the service provider did not accept them,
 typically because the session expired. Repeat with a password to refresh the
 jar, or re\-export from the browser.
+.TP
+.B the identity provider is throttling sign\-ons
+PingFederate served its "Multiple Sign\-On Delay" page: too many sign\-on
+attempts in a short time. Wait a few minutes. Cookies\-only runs that need no
+sign\-on do not count towards it.
+.TP
+.B the identity provider requires a second factor
+The password was accepted and the identity provider then served its RSA
+SecurID passcode form. The service provider's connection demands a second
+factor (Workday's does) and this package has no way to supply one.
 .TP
 .B landed on an application sign\-in page
 The identity provider pages are all behind us, but the final page's title

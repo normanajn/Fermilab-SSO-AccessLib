@@ -10,6 +10,7 @@ from requests_fermi_sso import FermiSSOSession
 
 from conftest import (
     CHOOSE_PAGE,
+    DELAY_PAGE,
     FINAL_PAGE,
     LOGIN_PAGE,
     POSTBACK_PAGE,
@@ -322,6 +323,15 @@ def test_classify_stranded_matches_the_host_not_the_query(session):
         session, "<html>huh</html>", "https://pingprod.fnal.gov:9031/idp/x"
     )
     assert any("stranded" in r for r in reasons)
+
+
+def test_classify_names_the_signon_throttle(session):
+    ok, reasons = _classify(
+        session, DELAY_PAGE, "https://pingprod.fnal.gov/as/authorization.oauth2"
+    )
+    assert not ok
+    assert reasons and "throttling" in reasons[0]
+    assert not any("choose-authentication" in r for r in reasons)
 
 
 def test_classify_ignores_idp_host_when_blank(session):

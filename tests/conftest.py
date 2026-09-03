@@ -136,6 +136,50 @@ ALLAUTH_FINAL_PAGE = """<html><head><title>Dashboard | Mu2eTalks</title></head>
 <body><h1>Dashboard</h1></body></html>
 """
 
+#: A service provider's SP-to-IdP AuthnRequest by HTTP-POST binding, trimmed
+#: from what Workday's identity gateway served on 2026-09-02. Note the IdP
+#: port and the absence of RelayState.
+AUTHN_SP = "https://wd5-identity.myworkday.com"
+AUTHN_START = AUTHN_SP + "/wday/authgwy/fermilab/upc/api/oidc/op/authorize?client_id=x"
+AUTHN_IDP_URL = "https://pingprod.fnal.gov:9031/idp/SSO.saml2"
+AUTHN_REQUEST_PAGE = """<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+<body onLoad="document.getElementById('this-form').submit()">
+<form method="post" id="this-form" action="{idp}">
+         <input type="hidden" id="SAMLRequest" name="SAMLRequest" value="PD94bWwgdmVyc2lvbj0iMS4wIj8+PEF1dGhuUmVxdWVzdC8+"/>
+<noscript><input type="submit" value="Continue"/></noscript>
+</form>
+</body></html>
+""".format(idp=AUTHN_IDP_URL)
+
+#: PingFederate's RSA SecurID second-factor form, served after the password
+#: on the Workday connection. Lowercase method="post" so login_page_re does
+#: not match it.
+SECURID_PAGE = """<html><head><title>SecurID - Authentication Form</title></head>
+<body><h1>Two-Factor Authentication</h1>
+<form method="post" action="{resume}">
+<input type="hidden" name="SecurIDAuthenticationAdapter:SECURID_CSRF_TOKEN" value="t"/>
+<input type="text" name="pf.username"/>
+<input type="password" name="pf.pass"/>
+<input type="hidden" name="pf.ok" value=""/><input type="hidden" name="pf.cancel" value=""/>
+</form></body></html>
+""".format(resume=RESUME)
+
+#: PingFederate's sign-on throttle page, as served at the OIDC authorization
+#: endpoint on 2026-09-02 after many probes in a few minutes. Its GET form
+#: carries pfidpadapterid, so it looks like the choose page to the regex.
+DELAY_PAGE = """<html>
+<head><base href="https://pingprod.fnal.gov/"/><title>Multiple Sign-On Delay</title></head>
+<body>
+<form method="GET" action="/as/authorization.oauth2">
+<input type="hidden" name="attempts" value="3"/>
+<input type="hidden" name="pfidpadapterid" value="ad..FormBased"/>
+<input type="hidden" name="rememberChoice" value="true"/>
+<p>Too many sign-on attempts. Please wait before trying again.</p>
+</form>
+</body></html>
+"""
+
 FINAL_PAGE = """<html><head><title>Mu2e Document Database</title></head>
 <body><h1>DocDB Home</h1><p>Welcome, testuser.</p></body></html>
 """
@@ -322,3 +366,32 @@ def allauth_sso_session_handler(request):
             return ALLAUTH_FINAL_PAGE, ["sessionid=s-2; Path=/; Secure; HttpOnly"]
         return ALLAUTH_PAGE
     return PLAIN_PAGE
+
+
+def authn_request_handler(request):
+    """
+    SP posts an AuthnRequest to the IdP, which (as on the Workday and
+    ServiceNow connections) serves the login form with no choose page.
+
+    GET  SP authorize URL     -> auto-submitting AuthnRequest form
+    POST IdP SSO.saml2        -> login form
+    POST resume URL           -> SAML postback form
+    POST mellon               -> the protected page
+    """
+    url, method = request.url, request.method
+    if url.startswith(AUTHN_START):
+        return AUTHN_REQUEST_PAGE
+    if url.startswith(AUTHN_IDP_URL) and method == "POST":
+        return LOGIN_PAGE
+    if RESUME in url and method == "POST":
+        return POSTBACK_PAGE
+    if url.startswith(SP + "/mellon/postResponse"):
+        return FINAL_PAGE, [f"{SP_COOKIE}=sess-9; Path=/; Secure; HttpOnly"]
+    return PLAIN_PAGE
+
+
+def authn_request_mfa_handler(request):
+    """As above, but the password is followed by a SecurID form."""
+    if RESUME in request.url and request.method == "POST":
+        return SECURID_PAGE
+    return authn_request_handler(request)

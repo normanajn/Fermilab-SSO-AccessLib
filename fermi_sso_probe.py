@@ -209,6 +209,12 @@ import re
 SIGNIN_TITLE_RE = re.compile(r"\b(sign[ -]?in|log[ -]?in|login)\b", re.I)
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
 
+#: PingFederate's RSA SecurID adapter form, served after the password when a
+#: connection demands a second factor (seen on the Workday connection).
+SECOND_FACTOR_RE = re.compile(
+    r'name="SecurIDAuthenticationAdapter:|<title>[^<]*SecurID', re.I
+)
+
 
 def _page_title(text: str) -> str:
     match = _TITLE_RE.search(text)
@@ -230,6 +236,12 @@ def classify(
     """
     reasons: List[str] = []
 
+    if session.delay_page_re.search(resp.text):
+        reasons.append(
+            "the identity provider is throttling sign-ons (Multiple Sign-On "
+            "Delay page); wait a few minutes and retry"
+        )
+        return False, reasons
     if session.choose_page_re.search(resp.text):
         reasons.append("still on the choose-authentication page")
     if session.login_page_re.search(resp.text):
@@ -245,6 +257,11 @@ def classify(
             )
     if session.postback_form_re.search(resp.text):
         reasons.append("stopped on the SAML postback form; it was not submitted")
+    if SECOND_FACTOR_RE.search(resp.text):
+        reasons.append(
+            "the identity provider requires a second factor (RSA SecurID "
+            "passcode form); this package cannot supply one"
+        )
     final_host = (urlsplit(resp.url).hostname or "").lower()
     if idp_host and final_host == idp_host.lower() and not reasons:
         reasons.append(f"stranded on {idp_host} at an unrecognized page")

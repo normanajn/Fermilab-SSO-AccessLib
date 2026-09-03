@@ -28,7 +28,8 @@ The sequence it walks (the first step only on django-allauth sites, see
 ```
 your GET  ->  allauth "Sign in with SSO" confirmation form   (POST csrf token)
                                           |
-              service provider  ->  30x redirect to pingprod.fnal.gov
+              service provider  ->  30x redirect to pingprod.fnal.gov,
+                                    or an auto-submitting SAMLRequest form (POSTed)
                                           |
                                     choose-auth page      (pick "Services Username and Password")
                                           |
@@ -245,6 +246,20 @@ Verified 2026-09-02: a password login to `mu2e-shifts.fnal.gov` followed by a
 cookies-only request to `mu2e-talks.fnal.gov` landed on the Talks dashboard
 without ever seeing a login form.
 
+### Two things that end a saved IdP session
+
+- **A forced re-authentication elsewhere.** Workday's SAML request carries
+  `ForceAuthn="true"`. Attempting it re-authenticated the IdP session and,
+  abandoned at the SecurID step, left both IdP sessions in the jar invalid.
+  The next cookies-only probes of unrelated sites failed until one password
+  login per connection restored them.
+- **The sign-on throttle.** Many sign-ons in a few minutes make pingprod
+  serve a "Multiple Sign-On Delay" page. It carries a GET form with
+  `pfidpadapterid`, so it looks like the choose page; the library recognizes
+  it by title, returns it unanswered rather than re-selecting an adapter, and
+  the probe reports "the identity provider is throttling sign-ons". Wait a
+  few minutes.
+
 ### Two identity-provider sessions, not one
 
 pingprod runs two connections and they do not share a login. Sites using
@@ -258,11 +273,19 @@ password login to ServiceNow made a cookies-only DocDB request succeed.
 ### Sites that need more than this library does
 
 - **Workday** (`wd5.myworkday.com/fermilab`). The home URL is a JavaScript
-  redirect stub, the identity portal is a single-page app, and its "Services
-  account log in" option ends in an auto-submitting SAML `AuthnRequest` form
-  with `ForceAuthn="true"`. Driven by hand, the IdP accepted the password and
-  then demanded an RSA SecurID passcode. Nothing short of a passcode prompt
-  gets past that.
+  redirect stub and the identity portal is a single-page app, so start from
+  its "Services account log in" URL, `/fermilab/login-saml2.flex`. That ends
+  in an auto-submitting SAML `AuthnRequest` form with `ForceAuthn="true"`,
+  which the library submits. The IdP then takes the password and demands an
+  RSA SecurID passcode, and the probe says so:
+
+  ```
+  fermi-sso-probe -c ~/.fermi_sso.cookies https://wd5.myworkday.com/fermilab/login-saml2.flex
+  RESULT: login FAILED
+    the identity provider requires a second factor (RSA SecurID passcode form); ...
+  ```
+
+  Nothing short of a passcode prompt gets past that.
 - **ServiceNow** (`fermi.servicenowservices.com`). Protected pages redirect to
   `auth_redirect.do`, a page whose only content is a JavaScript
   `location = <IdP URL>` assignment. The library does not follow JavaScript
@@ -536,11 +559,10 @@ and detects expiry only by being served the login page again.
 `ad..KrbOrForm`, `ad..KrbOrFormForWin`, and a CILogon certificate option;
 this package selects none of them.
 
-**JavaScript redirects and SAML `AuthnRequest` forms are not followed.**
-Workday and ServiceNow both interpose a page whose only job is a
-`window.location` assignment, and Workday then serves an auto-submitting
-`SAMLRequest` form. Both are generic patterns and candidates for the library;
-today they must be driven by the caller.
+**JavaScript redirects are not followed.** Workday and ServiceNow both
+interpose a page whose only job is a `window.location` assignment. Give the
+library the URL from that page instead. (Auto-submitting SAML `AuthnRequest`
+forms, the other pattern seen there, *are* handled.)
 
 **Second factors are not supported.** Where the IdP connection requires one,
 as Workday's does (RSA SecurID after the password), the flow stops at the

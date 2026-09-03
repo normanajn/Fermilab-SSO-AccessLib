@@ -30,7 +30,7 @@ session object alive.
 .SS Flow
 The overridden
 .B send()
-recognizes and answers four pages, in order:
+recognizes and answers five pages, in order:
 .TP
 .B django\-allauth confirmation page
 Served by Django applications that use allauth for Fermilab SSO at
@@ -50,6 +50,18 @@ for Django's CSRF check, and the application then redirects to the identity
 provider. Forms posting anywhere else, notably the site's own
 .I /accounts/logout/
 "Sign out" button, are never submitted.
+.TP
+.B SAML AuthnRequest form
+Some service providers (Workday, for one) reach the identity provider by
+the SAML HTTP\-POST binding: an auto\-submitting
+.B method="post"
+form carrying
+.B SAMLRequest
+and possibly
+.BR RelayState .
+The session posts every field of that form to its action. Forms carrying
+.B SAMLResponse
+are the opposite direction and are handled as postbacks below.
 .TP
 .B Choose\-authentication page
 A form with
@@ -89,6 +101,15 @@ and
 .BR SAMLResponse .
 The session posts it to the service provider, which sets the application
 session cookie.
+.PP
+One page is recognized and deliberately
+.I not
+answered: PingFederate's "Multiple Sign\-On Delay" throttle page, matched
+by title. It carries a GET form with
+.B pfidpadapterid
+and would otherwise be taken for the choose page, with every automatic
+re\-selection counted as a further attempt. The session logs a warning and
+returns it.
 .PP
 OIDC flows have no postback form: the identity provider answers the login
 POST with a redirect to the application's callback, which
@@ -181,6 +202,8 @@ was given.
 .B postback_form_re
 .TQ
 .B base_re
+.TQ
+.B delay_page_re
 Compiled patterns used to recognize each page. Exposed so callers can test
 a response themselves, which is how
 .BR fermi_sso_probe (1)
@@ -200,6 +223,9 @@ allauth confirmation page. Defaults to
 .TP
 .B allauth_count
 Number of allauth confirmation forms this session has submitted.
+.TP
+.B authn_request_count
+Number of SAML AuthnRequest forms this session has submitted.
 .TP
 .B cookie_file
 .TQ
@@ -250,6 +276,14 @@ Returns
 .RI ( url ", " formdata )
 for the confirmation form: the absolute URL it posts to and its hidden
 fields.
+.TP
+.BI is_saml_request_page( response )
+True when the response is an auto\-submitting SAML AuthnRequest form.
+.TP
+.BI extract_saml_request_form( response )
+Returns
+.RI ( url ", " formdata )
+for that form: the absolute identity provider URL and every field.
 .TP
 .BI load_cookies( path ", fmt=None, missing_ok=False)"
 Merge the cookies in
@@ -402,10 +436,8 @@ password adapter is driven; accounts requiring multi\-factor authentication
 cannot complete the login flow themselves and must supply cookies from a
 browser session instead. Where the service provider's connection demands a
 second factor regardless, as Workday's does (RSA SecurID after the
-password), the flow stops at the passcode form. JavaScript redirect pages
-and auto\-submitting SAML
-.B AuthnRequest
-forms, both seen in front of third\-party services, are not followed. The
+password), the flow stops at the passcode form. JavaScript redirect pages,
+seen in front of Workday and ServiceNow, are not followed. The
 identity provider keeps separate sessions for its OIDC and SAML connections,
 so a jar filled at an OIDC site still needs one password login at the first
 SAML site. Cookie reuse lasts only as long as the service

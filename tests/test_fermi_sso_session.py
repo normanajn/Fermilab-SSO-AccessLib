@@ -9,6 +9,7 @@ from requests_fermi_sso import FermiSSOSession
 
 from conftest import (
     CHOOSE_PAGE,
+    DELAY_PAGE,
     FINAL_PAGE,
     LOGIN_PAGE,
     OIDC_CHOOSE_PAGE,
@@ -261,3 +262,30 @@ def test_password_containing_a_colon_is_rejected():
 
 def test_session_is_a_requests_session():
     assert isinstance(FermiSSOSession(), __import__("requests").Session)
+
+
+# --------------------------------------------------------------------------
+# sign-on throttle page
+# --------------------------------------------------------------------------
+
+
+def test_delay_page_is_recognized_and_looks_like_a_choose_page(session):
+    assert session.delay_page_re.search(DELAY_PAGE)
+    # this is why it needs its own check: the generic pattern matches it too
+    assert session.choose_page_re.search(DELAY_PAGE)
+    assert not session.delay_page_re.search(CHOOSE_PAGE)
+
+
+def test_delay_page_is_returned_without_another_attempt():
+    calls = []
+
+    def handler(request):
+        calls.append(request.url)
+        return DELAY_PAGE
+
+    s = FermiSSOSession(userpass="testuser:s3cret")
+    s.mount("https://", ScriptedAdapter(handler))
+    resp = s.get(TARGET)
+    assert s.delay_page_re.search(resp.text)
+    assert len(calls) == 1, "must not re-select an adapter on the throttle page"
+    assert s.logging_in_already is False
