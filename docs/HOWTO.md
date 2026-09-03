@@ -245,6 +245,31 @@ Verified 2026-09-02: a password login to `mu2e-shifts.fnal.gov` followed by a
 cookies-only request to `mu2e-talks.fnal.gov` landed on the Talks dashboard
 without ever seeing a login form.
 
+### Two identity-provider sessions, not one
+
+pingprod runs two connections and they do not share a login. Sites using
+OIDC (`/as/…`: the Mu2e shift scheduler, Mu2eTalks, SCD Reporting) share one
+IdP session; sites using SAML (`/idp/…`: DocDB, ServiceNow) share another.
+A jar filled by logging in to an OIDC site signs you in to the other OIDC
+sites with no login form, but the first SAML site still asks for the
+password once. After that, the SAML sites share too. Verified 2026-09-02: a
+password login to ServiceNow made a cookies-only DocDB request succeed.
+
+### Sites that need more than this library does
+
+- **Workday** (`wd5.myworkday.com/fermilab`). The home URL is a JavaScript
+  redirect stub, the identity portal is a single-page app, and its "Services
+  account log in" option ends in an auto-submitting SAML `AuthnRequest` form
+  with `ForceAuthn="true"`. Driven by hand, the IdP accepted the password and
+  then demanded an RSA SecurID passcode. Nothing short of a passcode prompt
+  gets past that.
+- **ServiceNow** (`fermi.servicenowservices.com`). Protected pages redirect to
+  `auth_redirect.do`, a page whose only content is a JavaScript
+  `location = <IdP URL>` assignment. The library does not follow JavaScript
+  redirects, so point it at the IdP URL from that page, or log in once by
+  hand as above and let the jar carry the session; `/navpage.do` then works
+  directly.
+
 ### Django applications using allauth
 
 Several Fermilab Django apps (Mu2eTalks, SCD Activity Reporting) use
@@ -510,6 +535,16 @@ and detects expiry only by being served the login page again.
 **Kerberos and certificate auth are not supported.** The IdP offers
 `ad..KrbOrForm`, `ad..KrbOrFormForWin`, and a CILogon certificate option;
 this package selects none of them.
+
+**JavaScript redirects and SAML `AuthnRequest` forms are not followed.**
+Workday and ServiceNow both interpose a page whose only job is a
+`window.location` assignment, and Workday then serves an auto-submitting
+`SAMLRequest` form. Both are generic patterns and candidates for the library;
+today they must be driven by the caller.
+
+**Second factors are not supported.** Where the IdP connection requires one,
+as Workday's does (RSA SecurID after the password), the flow stops at the
+passcode form.
 
 **Page recognition is regex-based.** The library matches raw HTML with
 regular expressions that are sensitive to attribute order, quoting, and

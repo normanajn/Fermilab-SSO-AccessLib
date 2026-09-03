@@ -309,6 +309,21 @@ def test_classify_honours_expect_text(session):
     assert any("not found" in r for r in reasons)
 
 
+def test_classify_stranded_matches_the_host_not_the_query(session):
+    """
+    ServiceNow's auth_redirect.do carries the IdP URL in its query string. A
+    substring check flagged that as "stranded on pingprod"; only the final
+    URL's host counts.
+    """
+    url = "https://fermi.servicenowservices.com/auth_redirect.do?sysparm_url=https%3A%2F%2Fpingprod.fnal.gov%3A9031%2Fidp%2FSSO.saml2"
+    ok, reasons = _classify(session, "<html><title>ServiceNow</title>x</html>", url)
+    assert not any("stranded" in r for r in reasons)
+    ok, reasons = _classify(
+        session, "<html>huh</html>", "https://pingprod.fnal.gov:9031/idp/x"
+    )
+    assert any("stranded" in r for r in reasons)
+
+
 def test_classify_ignores_idp_host_when_blank(session):
     ok, _ = _classify(session, FINAL_PAGE, "https://pingprod.fnal.gov/x", idp_host="")
     assert ok

@@ -26,6 +26,7 @@ See fermi_sso_probe(1) and docs/HOWTO.md.
 
 import argparse
 import getpass
+from urllib.parse import urlsplit
 import os
 import stat
 import sys
@@ -244,7 +245,8 @@ def classify(
             )
     if session.postback_form_re.search(resp.text):
         reasons.append("stopped on the SAML postback form; it was not submitted")
-    if idp_host and idp_host in resp.url and not reasons:
+    final_host = (urlsplit(resp.url).hostname or "").lower()
+    if idp_host and final_host == idp_host.lower() and not reasons:
         reasons.append(f"stranded on {idp_host} at an unrecognized page")
     title = _page_title(resp.text)
     if not reasons and title and SIGNIN_TITLE_RE.search(title):

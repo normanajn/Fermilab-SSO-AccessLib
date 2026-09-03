@@ -400,7 +400,15 @@ Only the
 .B ad..FormBased
 password adapter is driven; accounts requiring multi\-factor authentication
 cannot complete the login flow themselves and must supply cookies from a
-browser session instead. Cookie reuse lasts only as long as the service
+browser session instead. Where the service provider's connection demands a
+second factor regardless, as Workday's does (RSA SecurID after the
+password), the flow stops at the passcode form. JavaScript redirect pages
+and auto\-submitting SAML
+.B AuthnRequest
+forms, both seen in front of third\-party services, are not followed. The
+identity provider keeps separate sessions for its OIDC and SAML connections,
+so a jar filled at an OIDC site still needs one password login at the first
+SAML site. Cookie reuse lasts only as long as the service
 provider's session; the library does not know the lifetime in advance and
 detects expiry only by landing on the login page again. Page recognition is
 regular\-expression based and

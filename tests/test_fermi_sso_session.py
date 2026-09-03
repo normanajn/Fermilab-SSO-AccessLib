@@ -145,6 +145,9 @@ def test_full_login_flow_reaches_protected_page(sso_session, sso_adapter):
     assert "pfidpadapterid=ad..FormBased" in sso_adapter.urls[1]
     assert sso_adapter.urls[2] == "https://pingprod.fnal.gov" + RESUME
     assert sso_adapter.urls[3] == SP + "/mellon/postResponse"
+    # one top-level request, one login -- not two (the nested login POST used
+    # to run unguarded and handle the postback itself)
+    assert sso_session.login_count == 1
 
 
 def test_login_post_carries_the_credentials(sso_session, sso_adapter):

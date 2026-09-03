@@ -147,6 +147,10 @@ class FermiSSOSession(requests.Session):
         m = self.login_page_re.search(res.text)
         if m and self.login_form_data:
             logger.debug("got Login page...")
+            # guard the nested post like the other branches; without it the
+            # nested send() handled the postback itself and this login was
+            # counted (and the jar saved) twice
+            self.logging_in_already = True
             url = self.extract_login_url(res)
             res = requests.Session.post(self, url, data=self.login_form_data)
             # Being served the login form again means the password was
