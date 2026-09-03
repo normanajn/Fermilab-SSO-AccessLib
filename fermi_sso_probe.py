@@ -54,6 +54,7 @@ ENV_IDP_HOST = "FERMI_SSO_IDP_HOST"
 ENV_DEBUG = "FERMI_SSO_DEBUG"
 ENV_ENV_FILE = "FERMI_SSO_ENV_FILE"
 ENV_COOKIE_FILE = "FERMI_SSO_COOKIE_FILE"
+ENV_AUTH = "FERMI_SSO_AUTH"
 ENV_COOKIE_FORMAT = "FERMI_SSO_COOKIE_FORMAT"
 
 
@@ -257,6 +258,16 @@ def classify(
             )
     if session.postback_form_re.search(resp.text):
         reasons.append("stopped on the SAML postback form; it was not submitted")
+    if (
+        resp.status_code == 401
+        and "negotiate" in resp.headers.get("WWW-Authenticate", "").lower()
+    ):
+        reasons.append(
+            "the identity provider's Kerberos (Negotiate) challenge was not "
+            "answered: no ticket, or the KDC refused a service ticket for "
+            f"HTTP/{urlsplit(resp.url).hostname}; check klist, kinit, and "
+            "the realm of that principal"
+        )
     if SECOND_FACTOR_RE.search(resp.text):
         reasons.append(
             "the identity provider requires a second factor (RSA SecurID "
@@ -332,6 +343,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-env-file",
         action="store_true",
         help="ignore .env files entirely",
+    )
+    parser.add_argument(
+        "-a",
+        "--auth",
+        choices=("password", "kerberos"),
+        default=None,
+        help=f"authentication method at the identity provider (${ENV_AUTH}; "
+        f"default password). kerberos uses the local ticket cache via "
+        f"requests-gssapi and needs no password",
     )
     parser.add_argument(
         "-c",
@@ -435,13 +455,19 @@ def main(argv=None) -> int:
     # optional. A jar that does not exist yet still needs a password to
     # perform the login that will populate it.
     have_cookies = bool(cookie_file) and os.path.isfile(cookie_file)
+    auth_method = resolve(args.auth, ENV_AUTH, environ, dotenv, "password")
+    if auth_method not in ("password", "kerberos"):
+        warn(f"error: ${ENV_AUTH} must be password or kerberos, not {auth_method!r}")
+        return 2
+    # Kerberos, like an existing jar, makes the password optional
+    password_optional = have_cookies or auth_method == "kerberos"
 
-    if not have_cookies and not user:
+    if not password_optional and not user:
         warn(f"error: no username; pass --user or set ${ENV_USER}")
         return 2
 
     prompt = None
-    if not args.no_prompt and sys.stdin.isatty() and not have_cookies:
+    if not args.no_prompt and sys.stdin.isatty() and not password_optional:
         prompt = lambda: getpass.getpass(f"Fermilab password for {user}: ")
 
     try:
@@ -450,10 +476,11 @@ def main(argv=None) -> int:
         warn(f"error: {exc}")
         return 2
 
-    if not password and not have_cookies:
+    if not password and not password_optional:
         warn(
             f"error: no password; use --password, --password-env, "
-            f"${ENV_PASSWORD}, a .env file, or --cookie-file with a saved jar"
+            f"${ENV_PASSWORD}, a .env file, --cookie-file with a saved jar, "
+            f"or --auth kerberos"
         )
         return 2
 
@@ -471,7 +498,7 @@ def main(argv=None) -> int:
     if debug:
         enable_debug()
 
-    session_kwargs = {}
+    session_kwargs = {"auth_method": auth_method}
     if password:
         session_kwargs["userpass"] = f"{user}:{password}"
     if cookie_file:
@@ -480,12 +507,20 @@ def main(argv=None) -> int:
         session_kwargs["cookie_save"] = not args.no_save_cookies
     try:
         session = FermiSSOSession(**session_kwargs)
+    except ImportError as exc:
+        warn(f"error: {exc}")
+        return 2
     except (OSError, ValueError) as exc:
         warn(f"error: cannot load cookie file {cookie_file}: {exc}")
         return 2
 
     if not args.quiet:
-        who = f"as {user}" if password else "with cookies only"
+        if auth_method == "kerberos":
+            who = "with Kerberos" + (
+                f" (password fallback as {user})" if password else ""
+            )
+        else:
+            who = f"as {user}" if password else "with cookies only"
         warn(f"fetching {url} {who}")
         if cookie_file:
             warn(
@@ -509,8 +544,10 @@ def main(argv=None) -> int:
                 else "not saved"
             )
             warn(f"login     : performed; cookies {saved}")
-        else:
+        elif ok:
             warn("login     : not needed (existing cookies accepted)")
+        else:
+            warn("login     : not completed")
         warn("")
 
     if args.output:

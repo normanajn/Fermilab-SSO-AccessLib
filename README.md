@@ -1,7 +1,7 @@
 
 ## Fermi SSO signon for Scripts
 
-This is a Session subclass for the Python requests library that will let scripts sign into Fermilab SSO with a user name and password, or with cookies saved from an earlier login.
+This is a Session subclass for the Python requests library that will let scripts sign into Fermilab SSO with a user name and password, with a Kerberos ticket, or with cookies saved from an earlier login.
 
 Basic theory:  If we go to fetch a page and get sent to the SSO pages, we choose password authentication and login and then go on to the page.
 Both the SAML (`/idp/`) and OIDC (`/as/`) flavours of the Fermilab PingFederate pages are handled, as are the confirmation form django-allauth puts in front of them and the auto-submitting SAML AuthnRequest form some service providers use to reach the IdP.
@@ -35,6 +35,24 @@ if s.login_page_re.search(resp.text):
 ```
 
 Cookies persist on the session, so later requests skip the login round trip.
+
+### Kerberos
+
+With a `kinit` ticket no password is needed. Install the optional dependency
+and pick the method:
+
+```
+pip install '.[kerberos]'
+fermi-sso-probe -a kerberos -c ~/.fermi_sso.cookies
+```
+
+```python
+s = FermiSSOSession(auth_method="kerberos")
+```
+
+The IdP's Kerberos principal lives in the FERMI.WIN.FNAL.GOV realm; if the
+challenge goes unanswered, `kgetcred HTTP/pingprod.fnal.gov@FERMI.WIN.FNAL.GOV`
+shows why. See the HOWTO.
 
 ### Reusing cookies across runs
 

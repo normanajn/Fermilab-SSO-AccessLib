@@ -112,9 +112,10 @@ Four sources are supported. They resolve highest priority first:
 | 3 | env file | `FERMI_USER=` | `FERMI_PASSWORD=` |
 | 4 | default | `$USER` | interactive prompt |
 
-An environment variable set to the empty string counts as absent. A fifth
-route, a saved cookie jar (`-c FILE`, `$FERMI_SSO_COOKIE_FILE`), makes both
-columns optional; it is covered in its own section below.
+An environment variable set to the empty string counts as absent. Two more
+routes make both columns optional: a saved cookie jar (`-c FILE`,
+`$FERMI_SSO_COOKIE_FILE`) and a Kerberos ticket (`-a kerberos`,
+`$FERMI_SSO_AUTH`). Each has its own section below.
 
 ### Command line
 
@@ -191,6 +192,50 @@ If nothing supplies a password and stdin is a terminal, you are prompted.
 Pass `-n` / `--no-prompt` to fail instead, which is what you want in
 automation. The prompt is skipped automatically when stdin is not a tty, and
 when a cookie file already exists (see the next section).
+
+## Logging in with a Kerberos ticket
+
+The identity provider offers a Kerberos adapter on both of its connections,
+`ad..KrbOrForm` on SAML and `ad..kerbForm` on OIDC. With
+`auth_method="kerberos"` (probe: `--auth kerberos`, or `FERMI_SSO_AUTH=`),
+the library selects whichever of those the choose page lists and lets
+`requests-gssapi` answer the IdP's `401 Negotiate` challenge from your
+ticket cache. No username or password is involved.
+
+```bash
+pip install 'requests-fermi_sso[kerberos]'     # adds requests-gssapi
+kinit
+fermi-sso-probe -a kerberos -c ~/.fermi_sso.cookies
+```
+
+```python
+s = FermiSSOSession(auth_method="kerberos", cookie_file="~/.fermi_sso.cookies")
+```
+
+If a connection offers no Kerberos adapter, the password adapter is selected
+instead, so `auth_method="kerberos"` plus `userpass` covers both cases.
+
+### When the challenge goes unanswered
+
+The probe reports "the identity provider's Kerberos (Negotiate) challenge was
+not answered". The cause is usually on the Kerberos side, not the HTTP side.
+The IdP's principal is `HTTP/pingprod.fnal.gov` in the **FERMI.WIN.FNAL.GOV**
+realm, reached from an FNAL.GOV ticket by cross-realm trust. Check it
+directly:
+
+```bash
+klist                                              # a krbtgt/FNAL.GOV ticket?
+kgetcred HTTP/pingprod.fnal.gov@FERMI.WIN.FNAL.GOV # can you get the service ticket?
+```
+
+Seen 2026-09-02: `klist` showed a valid FNAL.GOV ticket and a cross-realm
+ticket for FERMI.WIN.FNAL.GOV, yet `kgetcred` answered **"Clients credentials
+have been revoked"**. That is the Windows-realm KDC saying the account it
+maps your principal to is disabled, locked, or expired; nothing in the
+library can change that outcome. Requesting the principal in FNAL.GOV
+instead gives `LOOKING_UP_SERVER`, because it does not exist there. The
+library and probe paths were verified against a scripted IdP that issues the
+same challenge; the live path is blocked until that account state is fixed.
 
 ## Reusing cookies instead of a password
 
@@ -555,9 +600,9 @@ password](#reusing-cookies-instead-of-a-password).
 provider's session. The library has no way to know the lifetime up front
 and detects expiry only by being served the login page again.
 
-**Kerberos and certificate auth are not supported.** The IdP offers
-`ad..KrbOrForm`, `ad..KrbOrFormForWin`, and a CILogon certificate option;
-this package selects none of them.
+**Certificate auth is not supported.** The IdP offers CILogon certificate
+adapters; this package selects none of them. Kerberos is supported, see
+[Logging in with a Kerberos ticket](#logging-in-with-a-kerberos-ticket).
 
 **JavaScript redirects are not followed.** Workday and ServiceNow both
 interpose a page whose only job is a `window.location` assignment. Give the

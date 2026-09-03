@@ -93,6 +93,21 @@ Ignore env files entirely. Use this in cron and CI so a stray
 .I .env
 in the working directory cannot change the result.
 .TP
+.BI \-a " METHOD" "\fR, \fP" \-\-auth " METHOD"
+Authentication method at the identity provider:
+.B password
+(default) or
+.BR kerberos .
+With
+.B kerberos
+the local ticket cache answers the identity provider's Negotiate challenge
+through
+.B requests\-gssapi
+and no username or password is required; a password supplied as well is the
+fallback on a connection that offers no Kerberos adapter. See
+.BR FermiSSOSession (3),
+AUTHENTICATION METHODS.
+.TP
 .BI \-c " FILE" "\fR, \fP" \-\-cookie\-file " FILE"
 Load cookies from
 .I FILE
@@ -204,6 +219,10 @@ Default identity provider hostname.
 .B FERMI_SSO_ENV_FILE
 Path to the env file, overriding the default search.
 .TP
+.B FERMI_SSO_AUTH
+Default authentication method, as for
+.BR \-\-auth .
+.TP
 .B FERMI_SSO_COOKIE_FILE
 Default cookie jar path, as for
 .BR \-\-cookie\-file .
@@ -275,6 +294,15 @@ fermi_sso_probe \-u myaccount \-x "Welcome" https://example.fnal.gov/private
 .EE
 .RE
 .PP
+Log in with a Kerberos ticket, no password anywhere:
+.PP
+.RS
+.EX
+kinit
+fermi_sso_probe \-a kerberos \-c ~/.fermi_sso.cookies
+.EE
+.RE
+.PP
 Non\-interactive check suitable for cron, with credentials in a mode\-600 file:
 .PP
 .RS
@@ -327,6 +355,19 @@ authentication. See LIMITATIONS.
 The run was cookies\-only and the service provider did not accept them,
 typically because the session expired. Repeat with a password to refresh the
 jar, or re\-export from the browser.
+.TP
+.B the identity provider's Kerberos (Negotiate) challenge was not answered
+Under
+.B \-\-auth kerberos
+the identity provider returned its 401 unanswered. Either there is no
+ticket, or the KDC refused a service ticket for
+.BR HTTP/pingprod.fnal.gov .
+Check
+.BR klist (1),
+then try
+.B kgetcred HTTP/pingprod.fnal.gov@FERMI.WIN.FNAL.GOV
+directly; "Clients credentials have been revoked" from that realm is an
+account\-state problem on the Windows side, not a ticket problem.
 .TP
 .B the identity provider is throttling sign\-ons
 PingFederate served its "Multiple Sign\-On Delay" page: too many sign\-on

@@ -26,7 +26,7 @@ setup(
     ],
     python_requires=">=3.6",
     install_requires=["requests"],
-    extras_require={"test": ["pytest"]},
+    extras_require={"test": ["pytest"], "kerberos": ["requests-gssapi"]},
     entry_points={
         "console_scripts": ["fermi-sso-probe=fermi_sso_probe:main"],
     },

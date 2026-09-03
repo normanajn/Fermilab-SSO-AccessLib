@@ -16,6 +16,21 @@ logger = logging.getLogger(__name__)
 #: Cookie file formats understood by load_cookies()/save_cookies().
 COOKIE_FORMATS = ("netscape", "lwp", "json")
 
+#: Authentication methods FermiSSOSession can drive at the identity provider.
+AUTH_METHODS = ("password", "kerberos")
+
+#: The IdP's password adapter, the same on every connection seen so far.
+PASSWORD_ADAPTER = "ad..FormBased"
+
+#: Kerberos adapter ids differ per connection: the SAML connection offers
+#: ad..KrbOrForm (and ad..KrbOrFormForWin), the OAuth/OIDC one ad..kerbForm.
+#: Matched against the choose page's <option value="..."> list, so the right
+#: one is picked wherever the session lands. The "ForWin" variant is avoided
+#: because it expects a domain-joined Windows client.
+KERBEROS_ADAPTER_RE = re.compile(
+    r"^ad\.\.(?!KrbOrFormForWin$)[^\"]*(krb|kerb)[^\"]*$", re.I
+)
+
 _NETSCAPE_HEADER = "# Netscape HTTP Cookie File"
 _LWP_HEADER = "#LWP-Cookies-2.0"
 _HTTPONLY_PREFIX = "#HttpOnly_"
@@ -46,6 +61,12 @@ class FermiSSOSession(requests.Session):
         requests.Session):
 
         userpass       "user:password" for the IdP's password adapter
+        auth_method    "password" (default) or "kerberos". Kerberos selects
+                       the IdP's Kerberos adapter on the choose page and
+                       answers its SPNEGO (Negotiate) challenge from the
+                       local ticket cache via requests-gssapi
+        spnego_auth    a requests auth handler to use for the Negotiate
+                       challenge instead of requests_gssapi.HTTPSPNEGOAuth
         cookie_file    path of a cookie jar to load before the first request;
                        missing files are ignored so a first run can create it
         cookie_format  "netscape", "lwp", "json", or None to auto-detect
@@ -87,7 +108,16 @@ class FermiSSOSession(requests.Session):
             '<form.*method="post".*action="([^"]*)".*>.*<input.*name="RelayState" *value="([^"]*)".*<input.*name="SAMLResponse" *value="([^"]*)"',
             flags=re.S,
         )
-        self.adapterid = "ad..FormBased"
+        self.auth_method = kwargs.pop("auth_method", "password")
+        if self.auth_method not in AUTH_METHODS:
+            raise ValueError(
+                f"auth_method must be one of {AUTH_METHODS}, not {self.auth_method!r}"
+            )
+        spnego_auth = kwargs.pop("spnego_auth", None)
+        #: Adapter selected on the choose page for password authentication.
+        self.adapterid = PASSWORD_ADAPTER
+        #: Pattern picking the Kerberos adapter out of the choose page's options.
+        self.kerberos_adapter_re = KERBEROS_ADAPTER_RE
         self.logging_in_already = False
 
         # django-allauth puts a confirmation page in front of the IdP: the
@@ -113,6 +143,13 @@ class FermiSSOSession(requests.Session):
         self.login_count = 0
 
         requests.Session.__init__(self, *args, **kwargs)
+
+        if self.auth_method == "kerberos":
+            # The handler only acts on a 401 carrying WWW-Authenticate:
+            # Negotiate, so attaching it session-wide is harmless elsewhere.
+            self.auth = (
+                spnego_auth if spnego_auth is not None else _default_spnego_auth()
+            )
 
         if self.cookie_file:
             self.cookies_loaded = self.load_cookies(
@@ -173,6 +210,21 @@ class FermiSSOSession(requests.Session):
             res = requests.Session.get(self, url)
             for resp in res.history:
                 logger.debug(f"history_item:{resp.status_code}: {resp.text}")
+            if self.auth_method == "kerberos":
+                # The Kerberos adapter answers the adapter selection with a
+                # 401 Negotiate challenge that the auth handler satisfies
+                # underneath us. Anything other than a lingering 401 or an
+                # IdP page means the ticket was accepted.
+                if res.status_code == 401:
+                    logger.warning(
+                        "Kerberos (Negotiate) challenge from the identity "
+                        "provider was not satisfied; is there a valid ticket?"
+                    )
+                elif not (
+                    self.choose_page_re.search(res.text)
+                    or self.login_page_re.search(res.text)
+                ):
+                    performed_login = True
 
         m = self.login_page_re.search(res.text)
         if m and self.login_form_data:
@@ -244,11 +296,33 @@ class FermiSSOSession(requests.Session):
         m = self.login_page_re.search(resp.text)
         return base + m.group(1)
 
+    def choose_adapter(self, resp) -> str:
+        """
+        Adapter id to select on the choose page.
+
+        Password: self.adapterid (ad..FormBased). Kerberos: the first
+        <option> whose value matches kerberos_adapter_re, since the id
+        differs between the IdP's SAML and OIDC connections. If the page
+        offers no Kerberos option the password adapter is used instead, with
+        a warning, so a site without Kerberos still logs in when a password
+        was also supplied.
+        """
+        if self.auth_method != "kerberos":
+            return self.adapterid
+        options = re.findall(r'<option[^>]*value="([^"]*)"', resp.text)
+        for value in options:
+            if self.kerberos_adapter_re.search(value):
+                return value
+        logger.warning(
+            f"no Kerberos adapter among {options}; falling back to {self.adapterid}"
+        )
+        return self.adapterid
+
     def extract_chose_url(self, resp):
         """return form data to send to the Pick Authentication Method form"""
 
         formdata = {
-            "pfidpadapterid": self.adapterid,  # we want password
+            "pfidpadapterid": self.choose_adapter(resp),
             "rememberChoice": "true",  # don't re-ask
         }
         base = resp.url[0 : resp.url.find("/", 9)]
@@ -431,6 +505,30 @@ class FermiSSOSession(requests.Session):
             raise
         logger.debug(f"saved {len(cookies)} cookies to {path} ({fmt})")
         return len(cookies)
+
+
+# ----------------------------------------------------------------------
+# Kerberos / SPNEGO
+# ----------------------------------------------------------------------
+
+
+def _default_spnego_auth():
+    """
+    requests_gssapi.HTTPSPNEGOAuth configured for the IdP.
+
+    Mutual authentication is OPTIONAL because PingFederate does not return a
+    final Negotiate token on the redirect that follows a successful
+    exchange; REQUIRED would reject that response. opportunistic_auth stays
+    off so tokens are only produced in answer to a challenge.
+    """
+    try:
+        from requests_gssapi import OPTIONAL, HTTPSPNEGOAuth
+    except ImportError as exc:  # pragma: no cover - depends on the environment
+        raise ImportError(
+            "auth_method='kerberos' needs the requests-gssapi package: "
+            "pip install 'requests-fermi_sso[kerberos]'"
+        ) from exc
+    return HTTPSPNEGOAuth(mutual_authentication=OPTIONAL, opportunistic_auth=False)
 
 
 # ----------------------------------------------------------------------

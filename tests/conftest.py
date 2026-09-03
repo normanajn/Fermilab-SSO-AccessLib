@@ -248,11 +248,18 @@ class ScriptedAdapter(HTTPAdapter):
     def send(self, request, **kwargs):
         self.calls.append(request)
         result = self.handler(request)
+        status, headers = 200, {}
         if isinstance(result, tuple):
-            text, set_cookies = result
+            text, set_cookies = result[0], result[1]
+            if len(result) > 2:
+                status = result[2]
+            if len(result) > 3:
+                headers = result[3]
         else:
             text, set_cookies = result, ()
-        return make_response(request, text, set_cookies=set_cookies)
+        resp = make_response(request, text, status=status, set_cookies=set_cookies)
+        resp.headers.update(headers)
+        return resp
 
     @property
     def urls(self):
@@ -395,3 +402,51 @@ def authn_request_mfa_handler(request):
     if RESUME in request.url and request.method == "POST":
         return SECURID_PAGE
     return authn_request_handler(request)
+
+
+class FakeSPNEGOAuth:
+    """
+    Stand-in for requests_gssapi.HTTPSPNEGOAuth.
+
+    The real handler answers a 401 Negotiate by re-sending the request with
+    an Authorization header. The scripted transport has no connection object
+    to re-send through, so this fake attaches the header up front (as the
+    real one does with opportunistic_auth=True) and records what it saw.
+    """
+
+    def __init__(self, token="ZmFrZS1rZXJiZXJvcy10b2tlbg=="):
+        self.token = token
+        self.requests = []
+
+    def __call__(self, request):
+        self.requests.append(request.url)
+        request.headers["Authorization"] = f"Negotiate {self.token}"
+        return request
+
+
+def kerberos_handler(request):
+    """
+    SAML connection with the Kerberos adapter.
+
+    target              -> choose page
+    resume + kerbForm   -> 401 Negotiate unless an Authorization header is
+                           present, then the SAML postback form
+    POST mellon         -> the protected page
+    """
+    url, method = request.url, request.method
+    if url.startswith(SP + "/mellon/postResponse"):
+        return FINAL_PAGE, [f"{SP_COOKIE}=krb-1; Path=/; Secure; HttpOnly"]
+    if RESUME in url:
+        if "pfidpadapterid=ad..KrbOrForm" in url:
+            if request.headers.get("Authorization", "").startswith("Negotiate "):
+                return POSTBACK_PAGE
+            return ("", [], 401, {"WWW-Authenticate": "Negotiate"})
+        if "pfidpadapterid=ad..FormBased" in url:
+            return LOGIN_PAGE
+        if method == "POST":
+            return POSTBACK_PAGE
+    if url.startswith(TARGET):
+        if SP_COOKIE + "=" in request.headers.get("Cookie", ""):
+            return FINAL_PAGE
+        return CHOOSE_PAGE
+    return PLAIN_PAGE

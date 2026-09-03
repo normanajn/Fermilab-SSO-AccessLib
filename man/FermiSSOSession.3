@@ -9,6 +9,7 @@ FermiSSOSession \- requests.Session subclass that logs into Fermilab SSO
 .BI "r = s.get(\(dq" URL \(dq)
 .sp
 .BI "s = FermiSSOSession(cookie_file=\(dq" PATH \(dq)
+.B "s = FermiSSOSession(auth_method=\(dqkerberos\(dq)"
 .BI "n = s.load_cookies(" PATH ", fmt=None, missing_ok=False)"
 .BI "n = s.save_cookies(" PATH ", fmt=None)"
 .EE
@@ -75,7 +76,9 @@ The session re\-requests it with
 .B pfidpadapterid=ad..FormBased
 and
 .BR rememberChoice=true ,
-selecting password authentication.
+selecting password authentication; with
+.B auth_method="kerberos"
+it selects the page's Kerberos adapter instead (see AUTHENTICATION METHODS).
 .TP
 .B Login page
 A form with
@@ -122,6 +125,53 @@ flag suppresses this handling for the nested requests the session issues
 itself, preventing unbounded recursion. It is cleared before
 .B send()
 returns.
+.SS Authentication methods
+.B auth_method="password"
+(the default) drives the identity provider's
+.B ad..FormBased
+adapter with the
+.B userpass
+credentials.
+.PP
+.B auth_method="kerberos"
+selects the Kerberos adapter on the choose page and lets a SPNEGO handler,
+.B requests_gssapi.HTTPSPNEGOAuth
+by default, answer the identity provider's
+.B 401 / WWW\-Authenticate: Negotiate
+challenge from the local ticket cache. No password is needed. The adapter id
+is not fixed: the SAML connection offers
+.B ad..KrbOrForm
+and the OAuth/OIDC connection
+.BR ad..kerbForm ,
+so the first
+.B <option>
+matching
+.B kerberos_adapter_re
+is chosen, skipping
+.BR ad..KrbOrFormForWin ,
+which expects a domain\-joined Windows client. If the page offers no
+Kerberos adapter the password adapter is selected with a warning, so a
+session given both
+.B auth_method="kerberos"
+and
+.B userpass
+still logs in.
+.PP
+A challenge that stays unanswered comes back as the raw 401 with a warning
+logged. The usual cause is not the ticket's absence but the KDC refusing a
+service ticket for
+.BR HTTP/pingprod.fnal.gov :
+that principal lives in the FERMI.WIN.FNAL.GOV realm, reached from an
+FNAL.GOV ticket by cross\-realm trust, and a disabled or unmapped account
+there yields "Clients credentials have been revoked". Test outside the
+library with
+.BR "kgetcred HTTP/pingprod.fnal.gov@FERMI.WIN.FNAL.GOV" .
+.PP
+Kerberos support needs the
+.B requests\-gssapi
+package (extra
+.BR kerberos ):
+.B pip install 'requests\-fermi_sso[kerberos]'
 .SS Cookie reuse
 Every cookie the identity provider and service provider set during a login
 lives in the session jar, so within one process only the first request pays
@@ -140,7 +190,7 @@ cookies are bearer credentials; the file is written mode 0600 and should be
 treated like a password.
 .SH CONSTRUCTOR
 .TP
-.BI FermiSSOSession( "\fR...\fP" ", userpass=" STRING ", cookie_file=" PATH ", cookie_format=" FMT ", cookie_save=" BOOL )
+.BI FermiSSOSession( "\fR...\fP" ", userpass=" STRING ", auth_method=" NAME ", spnego_auth=" HANDLER ", cookie_file=" PATH ", cookie_format=" FMT ", cookie_save=" BOOL )
 The keywords below are consumed; all other arguments are passed to
 .BR requests.Session .
 .RS
@@ -149,6 +199,20 @@ The keywords below are consumed; all other arguments are passed to
 Split on
 .RB \(dq : \(dq
 into a username and password for the identity provider's password adapter.
+.TP
+.B auth_method
+.B password
+(default) or
+.BR kerberos .
+Anything else raises
+.BR ValueError .
+.TP
+.B spnego_auth
+A requests auth handler to attach for
+.B kerberos
+instead of the default
+.BR requests_gssapi.HTTPSPNEGOAuth ,
+for example a differently configured handler or a test stand\-in.
 .TP
 .B cookie_file
 Path of a cookie jar, with
@@ -210,8 +274,15 @@ a response themselves, which is how
 distinguishes a failed login from a successful one.
 .TP
 .B adapterid
-The identity provider adapter to select. Defaults to
+The identity provider adapter selected for password authentication.
+Defaults to
 .BR ad..FormBased .
+.TP
+.B auth_method
+.TQ
+.B kerberos_adapter_re
+The method in force and the pattern used to pick the Kerberos adapter out
+of the choose page's options.
 .TP
 .B logging_in_already
 Recursion guard; true only while a login sequence is in progress.
@@ -259,8 +330,12 @@ Absolute URL of the login form, honoring any
 .B <base>
 tag.
 .TP
+.BI choose_adapter( response )
+Adapter id to select on the choose page for the session's
+.BR auth_method .
+.TP
 .BI extract_chose_url( response )
-Absolute URL that selects password authentication, query string included.
+Absolute URL that selects that adapter, query string included.
 .TP
 .BI extract_post_back_data( response )
 Returns
@@ -389,6 +464,17 @@ provider skip the login round trip entirely. The identity provider's own
 session cookie persists too, so a jar filled by logging in to one site
 usually signs the session in to a second site behind the same IdP with no
 login sequence at all; the second site's cookies are then added to the jar.
+.PP
+Log in with a Kerberos ticket instead of a password:
+.PP
+.RS
+.EX
+s = FermiSSOSession(auth_method="kerberos", cookie_file="~/.fermi_sso.cookies")
+r = s.get("https://mu2e\-docdb.fnal.gov/cgi\-bin/sso/DocumentDatabase")
+if r.status_code == 401:
+    raise SystemExit("Kerberos challenge not answered; check klist")
+.EE
+.RE
 .PP
 Log in once, then reuse the jar from a later process with no password:
 .PP
