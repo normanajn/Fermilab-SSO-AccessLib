@@ -50,6 +50,9 @@ password](#reusing-cookies-instead-of-a-password).
 
 ## Install
 
+External dependencies for each authentication method, with install commands
+for macOS and Linux, are listed in [DEPENDENCIES.md](DEPENDENCIES.md).
+
 Requires Python 3.6+ and `requests`.
 
 ```bash

@@ -11,8 +11,12 @@ Alternatively the cookies from one successful login (including a browser login t
 ### Install
 
 ```
-pip install .
+pip install .                # password and cookie-jar modes: requests only
+pip install '.[kerberos]'    # adds requests-gssapi for --auth kerberos
 ```
+
+The YubiKey mode needs system tools (OpenSSL 3, the pkcs11 engine, a PKCS#11
+module); see [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md).
 
 This also installs the `fermi-sso-probe` command. For development:
 
@@ -118,6 +122,7 @@ fermi-sso-probe -c ~/.fermi_sso.cookies -n -q
 ### Documentation
 
 - [docs/HOWTO.md](docs/HOWTO.md) — install, credentials, troubleshooting
+- [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) — external dependencies per authentication method, with install commands per platform
 - `man ./man/fermi_sso_probe.1` — the probe utility
 - `man ./man/FermiSSOSession.3` — the library API
 
