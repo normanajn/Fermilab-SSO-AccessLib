@@ -332,6 +332,24 @@ login     : not needed (existing cookies accepted)
 login     : performed; cookies saved to /home/me/.fermi_sso.cookies
 ```
 
+### Inspecting a jar
+
+When a cookies-only run fails, look at the file before guessing. `fermi-sso-cookies`
+lists every cookie with its domain, path, time to expiry and flags, and
+unlike the library it shows expired cookies too, marked as such:
+
+```bash
+fermi-sso-cookies ~/.fermi_sso.cookies
+fermi-sso-cookies -D pingprod.fnal.gov -l ~/.fermi_sso.cookies   # just the IdP session, in detail
+fermi-sso-cookies --live -e ~/.fermi_sso.env                     # what would actually be loaded
+fermi-sso-cookies -j ~/.fermi_sso.cookies | jq .                 # machine-readable
+```
+
+Values are masked by default; add `-s` to see them. The exit status is 1
+when nothing matches the filters, so `fermi-sso-cookies -q --live -D
+pingprod.fnal.gov -N PF JAR` is a cheap "do I still have an IdP session"
+test for scripts. See `man ./man/fermi_sso_cookies.1`.
+
 ### One jar, several sites
 
 The identity provider's own session cookie is saved alongside the site

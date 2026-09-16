@@ -48,3 +48,4 @@ fi
 echo
 echo "done. activate with:  . $venv/bin/activate"
 echo "then try:             fermi-sso-probe -u \$USER"
+echo "inspect a jar with:   fermi-sso-cookies ~/.fermi_sso.cookies"

@@ -14,7 +14,12 @@ def wrap_find_packages(*args, **kwargs):
 long_description = (here / "README.md").read_text(encoding="utf-8")
 setup(
     name="requests-fermi_sso",
-    py_modules=["requests_fermi_sso", "fermi_sso_probe", "fermi_sso_yubikey"],
+    py_modules=[
+        "requests_fermi_sso",
+        "fermi_sso_probe",
+        "fermi_sso_yubikey",
+        "fermi_sso_cookies",
+    ],
     version="0.2.0",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -33,10 +38,11 @@ setup(
         "console_scripts": [
             "fermi-sso-probe=fermi_sso_probe:main",
             "fermi-sso-yubikey=fermi_sso_yubikey:main",
+            "fermi-sso-cookies=fermi_sso_cookies:main",
         ],
     },
     data_files=[
-        ("share/man/man1", ["man/fermi_sso_probe.1"]),
+        ("share/man/man1", ["man/fermi_sso_probe.1", "man/fermi_sso_cookies.1"]),
         ("share/man/man3", ["man/FermiSSOSession.3", "man/fermi_sso_yubikey.3"]),
     ],
 )
