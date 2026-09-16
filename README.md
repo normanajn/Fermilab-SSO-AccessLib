@@ -121,6 +121,7 @@ fermi-sso-probe -c ~/.fermi_sso.cookies -n -q
 
 ### Documentation
 
+- [docs/EXAMPLES.md](docs/EXAMPLES.md) — copy-paste recipes for DocDB, the shift scheduler, Mu2eTalks, ServiceNow, Kerberos, and the YubiKey
 - [docs/HOWTO.md](docs/HOWTO.md) — install, credentials, troubleshooting
 - [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) — external dependencies per authentication method, with install commands per platform
 - `man ./man/fermi_sso_probe.1` — the probe utility

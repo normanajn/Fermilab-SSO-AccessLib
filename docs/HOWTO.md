@@ -91,6 +91,9 @@ sudo install -m 644 man/FermiSSOSession.3 /usr/local/share/man/man3/
 
 ## Quick start
 
+Worked recipes against the sites used during development are collected in
+[EXAMPLES.md](EXAMPLES.md).
+
 Check that SSO works for your account, against the Mu2e DocDB:
 
 ```bash
