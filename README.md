@@ -18,7 +18,7 @@ pip install '.[kerberos]'    # adds requests-gssapi for --auth kerberos
 The YubiKey mode needs system tools (OpenSSL 3, the pkcs11 engine, a PKCS#11
 module); see [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md).
 
-This also installs the `fermi-sso-probe` command. For development:
+This also installs the `fermi-sso-probe` and `fermi-sso-cookies` commands. For development:
 
 ```
 ./bootstrap.sh          # creates venv/, installs with test extras, runs tests
@@ -119,12 +119,22 @@ fermi-sso-probe -u myaccount -c ~/.fermi_sso.cookies
 fermi-sso-probe -c ~/.fermi_sso.cookies -n -q
 ```
 
+`fermi-sso-cookies` shows what a jar holds without touching the network:
+every cookie with its domain, path, expiry and flags, expired ones included.
+Values are masked unless `-s` is given.
+
+```
+fermi-sso-cookies ~/.fermi_sso.cookies
+fermi-sso-cookies -D pingprod.fnal.gov -l ~/.fermi_sso.cookies   # is the IdP session still live?
+```
+
 ### Documentation
 
 - [docs/EXAMPLES.md](docs/EXAMPLES.md) — copy-paste recipes for DocDB, the shift scheduler, Mu2eTalks, ServiceNow, Kerberos, and the YubiKey
 - [docs/HOWTO.md](docs/HOWTO.md) — install, credentials, troubleshooting
 - [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) — external dependencies per authentication method, with install commands per platform
 - `man ./man/fermi_sso_probe.1` — the probe utility
+- `man ./man/fermi_sso_cookies.1` — the cookie jar inspector
 - `man ./man/FermiSSOSession.3` — the library API
 
 ### Tests

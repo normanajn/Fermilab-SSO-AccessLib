@@ -1,0 +1,238 @@
+.TH FERMI_SSO_COOKIES 1 "2026-09-16" "requests-fermi-sso 0.2.0" "User Commands"
+.SH NAME
+fermi_sso_cookies \- list the cookies held in a saved single sign\-on jar
+.SH SYNOPSIS
+.B fermi_sso_cookies
+.RI [ OPTIONS ]
+.RI [ FILE ]
+.SH DESCRIPTION
+.B fermi_sso_cookies
+reads a cookie jar and prints one line per cookie: domain, path, name, time
+to expiry, the secure/httponly/host\-only flags, and a masked value. A jar
+written by
+.BR FermiSSOSession (3)
+or by
+.BR fermi_sso_probe (1)
+is the only state a cookies\-only run has, so when such a run fails the
+first question is what the file actually holds and whether the identity
+provider or service provider session in it has expired. This tool answers
+that without touching the network.
+.PP
+All three jar formats the library understands are read:
+.B netscape
+(a browser's
+.IR cookies.txt ),
+.B lwp
+(Set\-Cookie3), and
+.BR json .
+The format is detected from the file extension and first line, as
+.B FermiSSOSession.load_cookies
+does, or forced with
+.BR \-\-cookie\-format .
+.PP
+Unlike
+.BR load_cookies ,
+which silently skips expired cookies, every cookie in the file is listed.
+Each is assigned a state:
+.RS
+.TP
+.B live
+has an expiry more than fifteen minutes away
+.TP
+.B soon
+expires within fifteen minutes
+.TP
+.B session
+has no expiry; kept for the browser's, or the jar's, lifetime
+.TP
+.B expired
+past its expiry and would not be loaded
+.RE
+.PP
+Cookie values are bearer credentials, so by default only the first four
+characters and the length are printed.
+.B \-\-show\-values
+prints them in full. Output goes to standard output; the file header and
+summary are omitted with
+.BR \-\-quiet .
+The tool also warns when the jar is readable by group or other.
+.SH OPTIONS
+.TP
+.I FILE
+The jar to read. May also be given as
+.BR "\-c FILE" ,
+or via
+.B $FERMI_SSO_COOKIE_FILE
+or an env file, with the usual precedence.
+.TP
+.BI \-c " FILE" "\fR, \fP" \-\-cookie\-file " FILE"
+Same as the positional
+.IR FILE .
+.TP
+.BI \-\-cookie\-format " FORMAT"
+One of
+.BR netscape ", " lwp ", " json .
+Default: detect.
+.TP
+.BI \-e " FILE" "\fR, \fP" \-\-env\-file " FILE"
+Load settings from
+.IR FILE .
+Default:
+.I ./.env
+then
+.IR ~/.fermi_sso.env ,
+the same search
+.BR fermi_sso_probe (1)
+performs, so a probe configuration names the jar for this tool too.
+.TP
+.B \-\-no\-env\-file
+Ignore env files entirely.
+.SS Output
+.TP
+.BR \-l ", " \-\-long
+One labelled block per cookie, with the absolute expiry timestamp.
+.TP
+.BR \-j ", " \-\-json
+Machine\-readable JSON: the file, the detected format, the generation time,
+state counts, and a list of cookie records with epoch expiries and a
+.B remaining
+field in seconds (negative once expired).
+.TP
+.BR \-s ", " \-\-show\-values
+Print cookie values in full.
+.TP
+.B \-\-utc
+With
+.BR \-\-long ,
+show expiry timestamps in UTC rather than local time.
+.TP
+.BR \-q ", " \-\-quiet
+Omit the file header, summary, and permissions warning.
+.SS Filters
+Filters of different kinds AND together; repeated filters of the same kind
+OR together.
+.TP
+.BI \-D " DOMAIN" "\fR, \fP" \-\-domain " DOMAIN"
+Only cookies for
+.I DOMAIN
+or a subdomain of it. Leading dots are ignored, so
+.B fnal.gov
+selects
+.IR .fnal.gov ", " pingprod.fnal.gov " and " mu2e\-docdb.fnal.gov .
+A shell\-style glob is matched literally against the domain instead.
+Repeatable.
+.TP
+.BI \-N " NAME" "\fR, \fP" \-\-name " NAME"
+Only cookies whose name matches the glob
+.IR NAME .
+Repeatable.
+.TP
+.B \-\-live
+Only cookies
+.B FermiSSOSession
+would actually load: the live, soon and session states.
+.TP
+.B \-\-expired
+Only cookies past their expiry.
+.TP
+.BR \-V ", " \-\-version
+Print the version and exit.
+.SH ENVIRONMENT
+.TP
+.B FERMI_SSO_COOKIE_FILE
+Default jar path, as for
+.IR FILE .
+.TP
+.B FERMI_SSO_COOKIE_FORMAT
+Default format, as for
+.BR \-\-cookie\-format .
+.TP
+.B FERMI_SSO_ENV_FILE
+Path to the env file, overriding the default search.
+.SH FILES
+.TP
+.I ./.env
+.TQ
+.I ~/.fermi_sso.env
+Env files searched in that order when
+.B \-\-env\-file
+is not given. Only the two cookie settings above are read from them.
+.SH EXIT STATUS
+.TP
+.B 0
+At least one cookie was listed.
+.TP
+.B 1
+The jar was read but no cookie survived the filters (or the jar is empty).
+.TP
+.B 2
+Usage error: no jar named, a missing or unparseable jar, a missing env
+file, or an unknown format.
+.SH EXAMPLES
+List the jar the probe has been maintaining:
+.PP
+.RS
+.EX
+fermi_sso_cookies ~/.fermi_sso.cookies
+.EE
+.RE
+.PP
+Typical output:
+.PP
+.RS
+.EX
+file    : /home/me/.fermi_sso.cookies
+format  : netscape
+cookies : 3 total, 1 live, 1 session, 1 expired
+
+DOMAIN               PATH  NAME           EXPIRES            FLAGS                      VALUE
+mu2e\-docdb.fnal.gov  /     mellon\-cookie  session            secure,httponly,host\-only  d1f4\(bu (32 chars)
+old.fnal.gov         /     stale          expired 2h 0m ago  secure,host\-only           **** (4 chars)
+pingprod.fnal.gov    /     PF             in 7h 12m          secure,httponly,host\-only  Kq9z\(bu (28 chars)
+.EE
+.RE
+.PP
+Is the identity provider session still good? Show only pingprod's cookies,
+in full:
+.PP
+.RS
+.EX
+fermi_sso_cookies \-D pingprod.fnal.gov \-l \-s ~/.fermi_sso.cookies
+.EE
+.RE
+.PP
+Check a browser export before handing it to the probe, using the jar named
+in the probe's env file:
+.PP
+.RS
+.EX
+fermi_sso_cookies \-\-live \-e ~/.fermi_sso.env
+.EE
+.RE
+.PP
+Feed the expired cookies to another tool:
+.PP
+.RS
+.EX
+fermi_sso_cookies \-j \-\-expired ~/.fermi_sso.cookies | jq \-r '.cookies[].name'
+.EE
+.RE
+.PP
+Exit status alone, for a script that decides whether to re\-login:
+.PP
+.RS
+.EX
+if ! fermi_sso_cookies \-q \-\-live \-D pingprod.fnal.gov \-N PF "$JAR" >/dev/null; then
+    fermi_sso_probe \-\-env\-file ~/.fermi_sso.env \-c "$JAR" \-n \-q
+fi
+.EE
+.RE
+.SH SEE ALSO
+.BR fermi_sso_probe (1),
+.BR FermiSSOSession (3)
+.PP
+Project documentation:
+.I docs/HOWTO.md
+in the source distribution.
+.SH AUTHOR
+Utility added for the Mu2e DocDB authentication work.
