@@ -1,0 +1,24 @@
+# Credential files -- never commit these. env.example is the template
+# and is intentionally not matched here.
+.env
+.fermi_sso.env
+*.env.local
+
+# Saved SSO cookie jars are bearer credentials
+*.cookies
+*.cookies.json
+*.cookies.lwp
+cookies.txt
+*.pin
+
+# Python virtual environment
+venv/
+
+# Byte-compiled
+__pycache__/
+*.py[cod]
+
+# Packaging / build artifacts
+build/
+dist/
+*.egg-info/

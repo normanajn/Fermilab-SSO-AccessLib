@@ -1,0 +1,478 @@
+.TH FERMI_SSO_PROBE 1 "2026-09-02" "requests-fermi-sso 0.2.0" "User Commands"
+.SH NAME
+fermi_sso_probe \- verify a Fermilab single sign\-on login
+.SH SYNOPSIS
+.B fermi_sso_probe
+.RI [ OPTIONS ]
+.RI [ URL ]
+.SH DESCRIPTION
+.B fermi_sso_probe
+fetches
+.I URL
+through a
+.BR FermiSSOSession (3)
+and reports whether the Fermilab single sign\-on sequence actually completed.
+.PP
+This check is not redundant with the HTTP status code.
+.B FermiSSOSession
+returns the identity provider's login page with status 200 when credentials
+are rejected, so a script that only inspects
+.B resp.status_code
+cannot tell a successful login from a failed one. The probe instead declares
+success only when all of the following hold:
+.RS
+.IP \(bu 3
+the final response URL is no longer on the identity provider host
+.IP \(bu 3
+the body no longer matches the choose\-authentication, login\-form, or
+SAML postback patterns
+.IP \(bu 3
+the page title does not read as a sign\-in page
+.IP \(bu 3
+the body is not the identity provider's SecurID second\-factor form
+.IP \(bu 3
+the text given to
+.B \-\-expect
+is present, if that option was used
+.RE
+.PP
+With no
+.I URL
+argument the probe fetches the Mu2e DocDB single sign\-on entry point,
+.IR https://mu2e\-docdb.fnal.gov/cgi\-bin/sso/DocumentDatabase .
+Note that
+.I https://mu2e\-docdb.fnal.gov/
+itself is an unprotected landing page and does not exercise the login flow.
+Any other SSO\-protected URL may be given instead.
+.PP
+With
+.B \-\-cookie\-file
+the session cookies are loaded before the request and saved after a
+completed login. Later runs, and any other script pointed at the same jar,
+then skip the password step entirely. A browser's exported
+.I cookies.txt
+serves as the jar too, which is the only way to drive an MFA\-enrolled
+account.
+.SH OPTIONS
+.TP
+.BI \-u " NAME" "\fR, \fP" \-\-user " NAME"
+Fermilab services account name.
+.TP
+.BI \-p " PASSWORD" "\fR, \fP" \-\-password " PASSWORD"
+Password given directly on the command line. Convenient for interactive
+one\-offs, but note that command lines are visible to every user on the
+system through
+.BR ps (1)
+and are recorded in the shell history file. Prefer
+.BR \-\-password\-env ,
+an env file, or the interactive prompt for anything repeated or scripted.
+.TP
+.BI \-\-password\-env " NAME"
+Read the password from the environment variable
+.IR NAME .
+It is an error if that variable is unset or empty.
+.TP
+.BI \-U " URL" "\fR, \fP" \-\-url " URL"
+Equivalent to the positional
+.I URL
+argument.
+.TP
+.BI \-e " FILE" "\fR, \fP" \-\-env\-file " FILE"
+Read settings from
+.IR FILE .
+It is an error if
+.I FILE
+does not exist. Without this option the probe looks for
+.I ./.env
+and then
+.IR ~/.fermi_sso.env ,
+using the first that exists.
+.TP
+.B \-\-no\-env\-file
+Ignore env files entirely. Use this in cron and CI so a stray
+.I .env
+in the working directory cannot change the result.
+.TP
+.BI \-a " METHOD" "\fR, \fP" \-\-auth " METHOD"
+Authentication method at the identity provider:
+.BR password " (default), " kerberos ", or " yubikey .
+With
+.B kerberos
+the local ticket cache answers the identity provider's Negotiate challenge
+through
+.BR requests\-gssapi .
+With
+.B yubikey
+the certificate in the token's PIV slot answers the identity provider's
+mutual\-TLS request through
+.B openssl
+and the pkcs11 engine; openssl prompts for the PIN on the terminal, so run
+this from a real terminal or give
+.BR \-\-pin\-source .
+Neither needs a username or password; a password supplied as well is the
+fallback on a connection that offers no such adapter. See
+.BR FermiSSOSession (3)
+and
+.BR fermi_sso_yubikey (3).
+.TP
+.BI \-\-pin\-source " FILE"
+With
+.BR "\-\-auth yubikey" ,
+read the PIV PIN from
+.I FILE
+(mode 600) instead of prompting.
+.TP
+.BI \-c " FILE" "\fR, \fP" \-\-cookie\-file " FILE"
+Load cookies from
+.I FILE
+before the request and write the jar back to it after any completed login.
+When
+.I FILE
+exists a password is optional: the probe first tries the cookies alone, and
+only if a password was also supplied does it fall back to logging in, which
+refreshes the file. A
+.I FILE
+that does not exist yet still requires a password, and is created by the
+resulting login. Formats: Netscape
+.I cookies.txt
+(the default, and what browser export extensions and
+.B curl \-c
+produce), LWP, or JSON; see
+.BR FermiSSOSession (3).
+The file is written mode 0600.
+.TP
+.BI \-\-cookie\-format " FMT"
+Force the cookie file format:
+.BR netscape ", " lwp ", or " json .
+By default the format is detected from the file extension and first line,
+and new files are written as Netscape.
+.TP
+.B \-\-no\-save\-cookies
+Read the cookie file but never rewrite it. Use this with a browser export
+you want to keep pristine.
+.TP
+.BI \-\-idp\-host " HOST"
+Hostname of the identity provider, used to detect a login that stalled
+without reaching the service provider. Defaults to
+.IR pingprod.fnal.gov .
+Set it to the empty string to disable that check when probing a site behind
+a different IdP.
+.TP
+.BI \-x " TEXT" "\fR, \fP" \-\-expect " TEXT"
+Require
+.I TEXT
+to appear in the final page body. Without this the probe only verifies that
+the login sequence finished, not that the page is the one you wanted.
+.TP
+.BI \-o " FILE" "\fR, \fP" \-\-output " FILE"
+Write the final response body to
+.IR FILE ,
+or to standard output if
+.I FILE
+is
+.BR \- .
+Diagnostics always go to standard error, so the body can be redirected
+cleanly.
+.TP
+.BR \-n ", " \-\-no\-prompt
+Never prompt for a missing password; fail instead. Implied when standard
+input is not a terminal.
+.TP
+.BR \-q ", " \-\-quiet
+Suppress the per\-request detail and print only the final verdict.
+.TP
+.BR \-d ", " \-\-debug
+Enable wire\-level HTTP logging and
+.B requests_fermi_sso
+debug output. This prints request and response headers, including cookies.
+.TP
+.BR \-V ", " \-\-version
+Print the version and exit.
+.TP
+.BR \-h ", " \-\-help
+Print a usage summary and exit.
+.SH CREDENTIAL AND SETTING RESOLUTION
+Every setting is resolved from the first source that supplies it, in this
+order:
+.RS
+.IP 1. 3
+command line options
+.IP 2. 3
+environment variables
+.IP 3. 3
+the env file
+.IP 4. 3
+built\-in defaults
+.RE
+.PP
+The password has one extra step: if no source supplies it and standard input
+is a terminal, the probe prompts for it without echo. An environment variable
+set to the empty string counts as absent.
+.PP
+When
+.B \-\-cookie\-file
+names an existing file, neither a username nor a password is required and
+the prompt is skipped; the cookies are tried on their own. Supply a password
+as well to let the probe log in and refresh the jar if the cookies are stale.
+.SH ENVIRONMENT
+.TP
+.B FERMI_USER
+Services account name. Falls back to
+.B USER
+if unset.
+.TP
+.B FERMI_PASSWORD
+Password. Read from the environment or from the env file.
+.TP
+.B FERMI_SSO_URL
+Default URL to fetch.
+.TP
+.B FERMI_SSO_IDP_HOST
+Default identity provider hostname.
+.TP
+.B FERMI_SSO_ENV_FILE
+Path to the env file, overriding the default search.
+.TP
+.B FERMI_SSO_AUTH
+Default authentication method, as for
+.BR \-\-auth .
+.TP
+.B FERMI_SSO_PIN_SOURCE
+Default PIN file, as for
+.BR \-\-pin\-source .
+.TP
+.B FERMI_SSO_COOKIE_FILE
+Default cookie jar path, as for
+.BR \-\-cookie\-file .
+.TP
+.B FERMI_SSO_COOKIE_FORMAT
+Default cookie file format, as for
+.BR \-\-cookie\-format .
+.TP
+.B FERMI_SSO_DEBUG
+Set to
+.B 1
+to enable debug logging.
+.SH FILES
+.TP
+.I ./.env
+Env file searched first when
+.B \-\-env\-file
+is not given.
+.TP
+.I ~/.fermi_sso.env
+Env file searched second.
+.PP
+Env file syntax is one
+.BI KEY= value
+per line. Blank lines and lines beginning with
+.B #
+are ignored, a leading
+.B export
+is stripped, and single\- or double\-quoted values have their quotes removed.
+Quote any value containing
+.BR # ,
+or a trailing comment will be stripped from it. Because these files hold a
+password, the probe warns when one is readable by group or other; keep them
+at mode 600.
+.TP
+.I cookies.txt
+No default location. Whatever
+.B \-\-cookie\-file
+names holds live session cookies, which are bearer credentials: keep it at
+mode 600, as the probe creates it, and treat it like a password.
+.SH EXIT STATUS
+.TP
+.B 0
+The login completed, or the loaded cookies were accepted, and all checks
+passed.
+.TP
+.B 1
+The login did not complete, or the
+.B \-\-expect
+text was absent.
+.TP
+.B 2
+Usage error: no username, no password and no cookie file, a missing env
+file, an unreadable cookie file, or a password containing a colon.
+.SH EXAMPLES
+Probe the default Mu2e DocDB entry point, prompting for the password:
+.PP
+.RS
+.EX
+fermi_sso_probe \-u myaccount
+.EE
+.RE
+.PP
+Probe a different SSO\-protected site and require known text on the page:
+.PP
+.RS
+.EX
+fermi_sso_probe \-u myaccount \-x "Welcome" https://example.fnal.gov/private
+.EE
+.RE
+.PP
+Log in with the YubiKey, from a terminal so openssl can ask for the PIN:
+.PP
+.RS
+.EX
+fermi_sso_probe \-a yubikey \-c ~/.fermi_sso.cookies https://mu2e\-shifts.fnal.gov/login/oidc?next=/
+.EE
+.RE
+.PP
+Log in with a Kerberos ticket, no password anywhere:
+.PP
+.RS
+.EX
+kinit
+fermi_sso_probe \-a kerberos \-c ~/.fermi_sso.cookies
+.EE
+.RE
+.PP
+Non\-interactive check suitable for cron, with credentials in a mode\-600 file:
+.PP
+.RS
+.EX
+fermi_sso_probe \-\-env\-file ~/.fermi_sso.env \-n \-q
+.EE
+.RE
+.PP
+Save the fetched page while watching the full exchange:
+.PP
+.RS
+.EX
+fermi_sso_probe \-u myaccount \-d \-o /tmp/page.html 2> /tmp/trace.log
+.EE
+.RE
+.PP
+Log in once with a password and keep the cookies, then run without one:
+.PP
+.RS
+.EX
+fermi_sso_probe \-u myaccount \-c ~/.fermi_sso.cookies
+fermi_sso_probe \-c ~/.fermi_sso.cookies \-n \-q
+.EE
+.RE
+.PP
+Cron job that reuses cookies while they last and re\-logs in from the env
+file when they expire, refreshing the jar:
+.PP
+.RS
+.EX
+fermi_sso_probe \-\-env\-file ~/.fermi_sso.env \-c ~/.fermi_sso.cookies \-n \-q
+.EE
+.RE
+.PP
+Use an MFA\-enrolled account through cookies exported from a browser, without
+modifying the export:
+.PP
+.RS
+.EX
+fermi_sso_probe \-c ~/Downloads/cookies.txt \-\-no\-save\-cookies \-n
+.EE
+.RE
+.SH DIAGNOSTICS
+.TP
+.B still on the login form -- wrong password, or the account requires MFA
+The password was rejected, or the account requires multi\-factor
+authentication. See LIMITATIONS.
+.TP
+.B still on the login form -- the cookie file did not yield a live session
+The run was cookies\-only and the service provider did not accept them,
+typically because the session expired. Repeat with a password to refresh the
+jar, or re\-export from the browser.
+.TP
+.B the identity provider's Kerberos (Negotiate) challenge was not answered
+Under
+.B \-\-auth kerberos
+the identity provider returned its 401 unanswered. Either there is no
+ticket, or the KDC refused a service ticket for
+.BR HTTP/pingprod.fnal.gov .
+Check
+.BR klist (1),
+then try
+.B kgetcred HTTP/pingprod.fnal.gov@FERMI.WIN.FNAL.GOV
+directly; "Clients credentials have been revoked" from that realm is an
+account\-state problem on the Windows side, not a ticket problem.
+.TP
+.B the identity provider sent the application 'access_denied'
+The selected adapter refused. For
+.B \-\-auth yubikey
+this means the TLS handshake on port 9032 did not present an accepted
+certificate: the hop failed, or the account is not enrolled for the token.
+.TP
+.B yubikey prerequisite missing
+A tool the hop needs is absent; run
+.BR fermi_sso_yubikey (3)
+for the full report.
+.TP
+.B the identity provider is throttling sign\-ons
+PingFederate served its "Multiple Sign\-On Delay" page: too many sign\-on
+attempts in a short time. Wait a few minutes. Cookies\-only runs that need no
+sign\-on do not count towards it.
+.TP
+.B the identity provider requires a second factor
+The password was accepted and the identity provider then served its RSA
+SecurID passcode form. The service provider's connection demands a second
+factor (Workday's does) and this package has no way to supply one.
+.TP
+.B landed on an application sign\-in page
+The identity provider pages are all behind us, but the final page's title
+says "Sign in" or "Log in": the application is showing its own sign\-in
+menu. Typically the URL you gave redirects to that menu rather than to the
+identity provider. Fetch the menu's "Log in with Fermilab SSO" link instead;
+the library handles django\-allauth's confirmation form from there. Use
+.B \-\-expect
+as well; this title check is a heuristic.
+.TP
+.B cannot load cookie file
+The file exists but could not be parsed in the detected or requested format.
+.TP
+.B still on the choose\-authentication page
+The identity provider did not accept the password\-authentication selection.
+The adapter identifier may have changed at the IdP.
+.TP
+.B stopped on the SAML postback form
+Authentication succeeded but the assertion was not posted back to the
+service provider.
+.TP
+.B stranded on pingprod.fnal.gov
+The flow ended on the IdP at a page the library does not recognize, such as
+an error or consent interstitial.
+.TP
+.B password contains ':'
+.B FermiSSOSession
+packs the credentials into a single
+.RI \(dq user : pass \(dq
+string and splits on every colon, so an embedded colon cannot be
+represented. Use an account whose password has no colon.
+.SH LIMITATIONS
+The underlying library drives only the
+.B ad..FormBased
+adapter, which is the identity provider's
+.RB \(dq "Services Username and Password" \(dq
+option. Accounts enrolled in multi\-factor authentication cannot complete
+this flow, because there is no path for a second factor. Non\-interactive
+scripts generally need a service account provisioned for password
+authentication, or must be fed cookies from a browser login with
+.BR \-\-cookie\-file .
+Those cookies last only as long as the service provider's session; the probe
+learns of expiry only by landing on the login page again.
+.PP
+Page recognition is done with regular expressions over the raw HTML. A markup
+change at the identity provider will present as a login failure rather than
+as a parse error.
+.PP
+.B FermiSSOSession
+keeps its in\-flight state on the session object and is not safe to share
+across threads. Use one session per thread.
+.SH SEE ALSO
+.BR curl (1),
+.BR ps (1)
+.PP
+Project documentation:
+.I docs/HOWTO.md
+in the source distribution.
+.SH AUTHOR
+Library by Marc Mengel <mengel@fnal.gov>. Probe utility added for the
+Mu2e DocDB authentication work.

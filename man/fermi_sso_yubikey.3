@@ -1,0 +1,182 @@
+.TH FERMI_SSO_YUBIKEY 3 "2026-09-02" "requests-fermi-sso 0.2.0" "Python Library"
+.SH NAME
+fermi_sso_yubikey \- YubiKey (PIV) certificate hop for FermiSSOSession
+.SH SYNOPSIS
+.EX
+.B from fermi_sso_yubikey import YubiKeyCertHop
+.B from requests_fermi_sso import FermiSSOSession
+.sp
+.B s = FermiSSOSession(auth_method=\(dqyubikey\(dq, cert_hop=YubiKeyCertHop())
+.BI "r = s.get(\(dq" URL \(dq)
+.sp
+.B fermi_sso_yubikey
+.RI [ OPTIONS ]
+.EE
+.SH DESCRIPTION
+Fermilab's identity provider authenticates its hardware\-token adapters
+(FNAL Yubikey, HSPD\-12) by client certificate on a separate mutual\-TLS
+listener,
+.IR pingprod.fnal.gov:9032 .
+The certificate is the one in the YubiKey's PIV authentication slot (9A),
+issued by FERMI Sub CA 01, and its private key never leaves the token.
+Python's TLS stack can only load keys from files, so
+.B FermiSSOSession
+cannot perform that request itself.
+.PP
+.B YubiKeyCertHop
+performs exactly that one request. Given the redirect the identity provider
+issues after the adapter is selected, it runs
+.PP
+.RS
+.EX
+openssl s_client \-connect pingprod.fnal.gov:9032 \-servername pingprod.fnal.gov \e
+    \-engine pkcs11 \-keyform engine \-key pkcs11:id=%01;type=private \e
+    \-cert <9A certificate exported as PEM> \-quiet
+.EE
+.RE
+.PP
+writes the GET, with the session's cookies for the identity provider, to
+the connection, and parses the raw HTTP response into a
+.BR HopResponse .
+The session absorbs the Set\-Cookie headers and follows the redirect back to
+the application. The certificate is exported from the token with
+.BR pkcs11\-tool (1),
+which needs no PIN. The private\-key operation does:
+.B openssl
+prompts on the controlling terminal, unless a pin\-source file is given.
+.SH REQUIREMENTS
+An OpenSSL 3 build with engine support (Apple's
+.I /usr/bin/openssl
+is LibreSSL and will not do), the
+.B pkcs11
+engine from libp11, a PKCS#11 module for the token (libykcs11 from
+yubico\-piv\-tool, or opensc\-pkcs11), and
+.B pkcs11\-tool
+from opensc. On macOS:
+.PP
+.RS
+.EX
+brew install openssl@3 libp11 yubico\-piv\-tool opensc ykman
+.EE
+.RE
+.PP
+Run
+.B fermi_sso_yubikey
+with no arguments to check all of it.
+.SH CLASS
+.TP
+.BI YubiKeyCertHop( "openssl_bin=None, engines_dir=None, module_path=None, key_uri=None, pin_source=None, pkcs11_tool=None, cert_pem=None, timeout=180, environ=None, runner=None" )
+Every argument falls back to the matching environment variable (see
+ENVIRONMENT) and then to Homebrew and common Linux paths.
+.RS
+.TP
+.B key_uri
+PKCS#11 URI of the private key. Default
+.BR pkcs11:id=%01;type=private ,
+slot 9A. Add
+.B token=...
+when more than one token is present.
+.TP
+.B pin_source
+Path of a file holding the PIV PIN. It is passed to the engine as
+.B pin\-source=file:...
+so openssl does not prompt. Keep it mode 600. Without it, openssl prompts.
+.TP
+.B cert_pem
+Path of the 9A certificate as PEM. Exported from the token into a private
+temporary directory when not given.
+.TP
+.B runner
+Replacement for the subprocess call, for tests.
+.RE
+.SH METHODS
+.TP
+.BI __call__( url ", " prepared_request )
+Perform the hop. Returns a
+.BR HopResponse ;
+raises
+.B RuntimeError
+when openssl produced no HTTP response, with openssl's last stderr line.
+.TP
+.B check()
+List of
+.RI ( what ", " ok ", " detail )
+for each prerequisite. Reads the token's public objects; never touches the
+PIN.
+.TP
+.B ensure_cert_pem()
+Path of the exported certificate, exporting it on first use.
+.TP
+.BI command( host ", " port )
+The argv that would be run, for inspection.
+.TP
+.B environment()
+The subprocess environment:
+.B OPENSSL_ENGINES
+and
+.B PKCS11_MODULE_PATH
+set for the engine.
+.SH FUNCTIONS
+.TP
+.BI build_request( prepared_request ", " urlsplit_parts )
+Serialize the GET as HTTP/1.1 bytes with the prepared headers, minus
+Accept\-Encoding (the raw pipe cannot decompress), plus
+.BR "Connection: close" .
+.TP
+.BI parse_http_response( raw_bytes )
+Parse a status line, headers (all Set\-Cookie values kept), and a body
+delimited by Content\-Length or chunked encoding, skipping any s_client
+chatter before the status line.
+.SH COMMAND LINE
+.B fermi_sso_yubikey
+prints the readiness report and the exact openssl command, and exits 0 when
+everything is in place. Options:
+.TP
+.BI \-\-openssl " PATH" "\fR, \fP" \-\-engines\-dir " DIR" "\fR, \fP" \-\-module " PATH" "\fR, \fP" \-\-key " URI" "\fR, \fP" \-\-pin\-source " FILE"
+Override the corresponding setting.
+.TP
+.BI \-\-export\-cert " FILE"
+Also write the 9A certificate as PEM to
+.IR FILE .
+.SH ENVIRONMENT
+.TP
+.B FERMI_SSO_OPENSSL
+OpenSSL 3 binary.
+.TP
+.B FERMI_SSO_ENGINES_DIR
+Directory holding
+.IR pkcs11.dylib " or " pkcs11.so .
+.TP
+.B FERMI_SSO_PKCS11_MODULE
+The PKCS#11 module.
+.TP
+.B FERMI_SSO_PKCS11_KEY
+Private key URI.
+.TP
+.B FERMI_SSO_PIN_SOURCE
+PIN file.
+.TP
+.B FERMI_SSO_PKCS11_TOOL
+.BR pkcs11\-tool (1)
+binary.
+.SH DIAGNOSTICS
+.TP
+.B no HTTP response over the client\-certificate connection
+openssl exited without a response. Its last stderr line follows: a wrong or
+missing PIN, a key the engine could not find (check the URI against
+.BR "pkcs11\-tool \-O" ),
+or a handshake the server refused.
+.TP
+.B access_denied
+Reported by
+.BR fermi_sso_probe (1)
+when the hop succeeded at TLS level but the identity provider still refused
+the adapter. The certificate was not accepted for this account.
+.SH SEE ALSO
+.BR FermiSSOSession (3),
+.BR fermi_sso_probe (1),
+.BR ykman (1),
+.BR pkcs11\-tool (1),
+.BR openssl\-s_client (1)
+.SH AUTHOR
+Added for the Mu2e DocDB authentication work.

@@ -1,0 +1,591 @@
+.TH FERMISSOSESSION 3 "2026-09-02" "requests-fermi-sso 0.2.0" "Python Library"
+.SH NAME
+FermiSSOSession \- requests.Session subclass that logs into Fermilab SSO
+.SH SYNOPSIS
+.EX
+.B from requests_fermi_sso import FermiSSOSession
+.sp
+.BI "s = FermiSSOSession(userpass=f\(dq{" user } : { pass }\(dq)
+.BI "r = s.get(\(dq" URL \(dq)
+.sp
+.BI "s = FermiSSOSession(cookie_file=\(dq" PATH \(dq)
+.B "s = FermiSSOSession(auth_method=\(dqkerberos\(dq)"
+.B "s = FermiSSOSession(auth_method=\(dqyubikey\(dq, cert_hop=YubiKeyCertHop())"
+.BI "n = s.load_cookies(" PATH ", fmt=None, missing_ok=False)"
+.BI "n = s.save_cookies(" PATH ", fmt=None)"
+.EE
+.SH DESCRIPTION
+.B FermiSSOSession
+subclasses
+.B requests.Session
+and overrides
+.BR send() .
+Every response is inspected before it is handed back; if it looks like a
+stage of the Fermilab PingFederate single sign\-on sequence, the session
+answers it and continues, so the caller receives the protected page rather
+than the login machinery.
+.PP
+Callers use it exactly like a normal
+.BR requests.Session .
+There is no explicit login call, and no state to manage beyond keeping the
+session object alive.
+.SS Flow
+The overridden
+.B send()
+recognizes and answers five pages, in order:
+.TP
+.B django\-allauth confirmation page
+Served by Django applications that use allauth for Fermilab SSO at
+.I /accounts/<provider>/login/
+or
+.IR /accounts/oidc/<id>/login/ :
+a
+.B method="post"
+form whose only field is
+.B csrfmiddlewaretoken
+(optionally also
+.BR next ),
+posting back to the page's own URL. The session posts it, with a
+same\-origin
+.B Referer
+for Django's CSRF check, and the application then redirects to the identity
+provider. Forms posting anywhere else, notably the site's own
+.I /accounts/logout/
+"Sign out" button, are never submitted.
+.TP
+.B SAML AuthnRequest form
+Some service providers (Workday, for one) reach the identity provider by
+the SAML HTTP\-POST binding: an auto\-submitting
+.B method="post"
+form carrying
+.B SAMLRequest
+and possibly
+.BR RelayState .
+The session posts every field of that form to its action. Forms carrying
+.B SAMLResponse
+are the opposite direction and are handled as postbacks below.
+.TP
+.B Choose\-authentication page
+A form with
+.B method="GET"
+and an action under
+.I /idp/
+(SAML) or
+.I /as/
+(OIDC / OAuth2).
+The session re\-requests it with
+.B pfidpadapterid=ad..FormBased
+and
+.BR rememberChoice=true ,
+selecting password authentication; with
+.B auth_method="kerberos"
+it selects the page's Kerberos adapter instead (see AUTHENTICATION METHODS).
+.TP
+.B Login page
+A form with
+.B method="POST"
+and an action under
+.I /idp/
+or
+.IR /as/ .
+The session posts
+.BR pf.username ,
+.BR pf.pass ,
+.BR pf.ok ,
+.BR pf.cancel ,
+and
+.BR pf.adapterId .
+This step is skipped when the session was constructed without
+.BR userpass .
+.TP
+.B SAML postback form
+An auto\-submitting form carrying
+.B RelayState
+and
+.BR SAMLResponse .
+The session posts it to the service provider, which sets the application
+session cookie.
+.PP
+One page is recognized and deliberately
+.I not
+answered: PingFederate's "Multiple Sign\-On Delay" throttle page, matched
+by title. It carries a GET form with
+.B pfidpadapterid
+and would otherwise be taken for the choose page, with every automatic
+re\-selection counted as a further attempt. The session logs a warning and
+returns it.
+.PP
+OIDC flows have no postback form: the identity provider answers the login
+POST with a redirect to the application's callback, which
+.B requests
+follows on its own, so the sequence ends one step earlier.
+.PP
+A
+.B logging_in_already
+flag suppresses this handling for the nested requests the session issues
+itself, preventing unbounded recursion. It is cleared before
+.B send()
+returns.
+.SS Authentication methods
+.B auth_method="password"
+(the default) drives the identity provider's
+.B ad..FormBased
+adapter with the
+.B userpass
+credentials.
+.PP
+.B auth_method="kerberos"
+selects the Kerberos adapter on the choose page and lets a SPNEGO handler,
+.B requests_gssapi.HTTPSPNEGOAuth
+by default, answer the identity provider's
+.B 401 / WWW\-Authenticate: Negotiate
+challenge from the local ticket cache. No password is needed. The adapter id
+is not fixed: the SAML connection offers
+.B ad..KrbOrForm
+and the OAuth/OIDC connection
+.BR ad..kerbForm ,
+so the first
+.B <option>
+matching
+.B kerberos_adapter_re
+is chosen, skipping
+.BR ad..KrbOrFormForWin ,
+which expects a domain\-joined Windows client. If the page offers no
+Kerberos adapter the password adapter is selected with a warning, so a
+session given both
+.B auth_method="kerberos"
+and
+.B userpass
+still logs in.
+.PP
+A challenge that stays unanswered comes back as the raw 401 with a warning
+logged. The usual cause is not the ticket's absence but the KDC refusing a
+service ticket for
+.BR HTTP/pingprod.fnal.gov :
+that principal lives in the FERMI.WIN.FNAL.GOV realm, reached from an
+FNAL.GOV ticket by cross\-realm trust, and a disabled or unmapped account
+there yields "Clients credentials have been revoked". Test outside the
+library with
+.BR "kgetcred HTTP/pingprod.fnal.gov@FERMI.WIN.FNAL.GOV" .
+.PP
+Kerberos support needs the
+.B requests\-gssapi
+package (extra
+.BR kerberos ):
+.B pip install 'requests\-fermi_sso[kerberos]'
+.PP
+.B auth_method="yubikey"
+selects the hardware\-token adapter (FNAL Yubikey, then any Yubikey, then
+HSPD\-12) on the choose page. The identity provider answers with a redirect
+to its mutual\-TLS listener on port 9032 (matched by
+.BR mtls_location_re ).
+That redirect is not followed by
+.BR requests ;
+it is handed to the
+.B cert_hop
+callable, which performs the one request with the token's certificate and
+returns a
+.BR HopResponse .
+The session absorbs its Set\-Cookie headers and follows its redirect back to
+the application. See
+.BR fermi_sso_yubikey (3)
+for the openssl\-based hop and its requirements. A refused certificate comes
+back as the application's error page with
+.B error=access_denied
+in the redirect; that is not counted as a login.
+.SS Cookie reuse
+Every cookie the identity provider and service provider set during a login
+lives in the session jar, so within one process only the first request pays
+for the login. With
+.B cookie_file
+that jar is loaded before the first request and written back after each
+completed login sequence, so the next process, or any other script pointed
+at the same file, is already logged in and needs no password at all.
+.PP
+The file may equally be a browser's exported
+.IR cookies.txt .
+That is the only route for an account enrolled in multi\-factor
+authentication: log in once in a browser, export the cookies for the
+service provider, and hand them to the session. Note that the session
+cookies are bearer credentials; the file is written mode 0600 and should be
+treated like a password.
+.SH CONSTRUCTOR
+.TP
+.BI FermiSSOSession( "\fR...\fP" ", userpass=" STRING ", auth_method=" NAME ", spnego_auth=" HANDLER ", cert_hop=" CALLABLE ", cookie_file=" PATH ", cookie_format=" FMT ", cookie_save=" BOOL )
+The keywords below are consumed; all other arguments are passed to
+.BR requests.Session .
+.RS
+.TP
+.B userpass
+Split on
+.RB \(dq : \(dq
+into a username and password for the identity provider's password adapter.
+.TP
+.B auth_method
+.BR password " (default), " kerberos ", or " yubikey .
+Anything else raises
+.BR ValueError .
+.TP
+.B cert_hop
+Callable
+.RI ( url ", " prepared_request ") -> " HopResponse
+that performs one GET with a client certificate Python cannot present.
+Required for
+.BR yubikey .
+.TP
+.B spnego_auth
+A requests auth handler to attach for
+.B kerberos
+instead of the default
+.BR requests_gssapi.HTTPSPNEGOAuth ,
+for example a differently configured handler or a test stand\-in.
+.TP
+.B cookie_file
+Path of a cookie jar, with
+.B ~
+expanded. It is loaded immediately; a file that does not exist yet is
+ignored so a first run can create it. The number of cookies loaded is left in
+.BR cookies_loaded .
+.TP
+.B cookie_format
+One of
+.BR netscape ", " lwp ", or " json .
+Defaults to
+.BR None ,
+meaning detect from the file extension
+.RI ( .json ", " .lwp )
+and then the first line; unrecognized files are read as Netscape
+.IR cookies.txt ,
+and new files are written in that format.
+.TP
+.B cookie_save
+When true the jar is rewritten to
+.B cookie_file
+after any request that completed a login sequence or otherwise changed the
+jar, for example a second site behind the same identity provider signing
+the session in through a bare redirect chain. Defaults to true whenever
+.B cookie_file
+is given. A request that leaves the jar unchanged never touches the file, so
+a browser export is not rewritten unless the site issued new cookies.
+.RE
+.PP
+Without
+.BR userpass ,
+the session still selects an authentication method and submits postback
+forms, but never fills in the login form. Combined with
+.B cookie_file
+this is the cookies\-only mode; alone, it is useful for inspecting the flow
+without credentials.
+.SH ATTRIBUTES
+.TP
+.B login_form_data
+The dict posted to the login form, or
+.B None
+when no
+.B userpass
+was given.
+.TP
+.B choose_page_re
+.TQ
+.B login_page_re
+.TQ
+.B postback_form_re
+.TQ
+.B base_re
+.TQ
+.B delay_page_re
+Compiled patterns used to recognize each page. Exposed so callers can test
+a response themselves, which is how
+.BR fermi_sso_probe (1)
+distinguishes a failed login from a successful one.
+.TP
+.B adapterid
+The identity provider adapter selected for password authentication.
+Defaults to
+.BR ad..FormBased .
+.TP
+.B auth_method
+.TQ
+.B kerberos_adapter_re
+The method in force and the pattern used to pick the Kerberos adapter out
+of the choose page's options.
+.TP
+.B logging_in_already
+Recursion guard; true only while a login sequence is in progress.
+.TP
+.B allauth_url_re
+Pattern the response URL path must match before a page is considered an
+allauth confirmation page. Defaults to
+.BR ^/accounts/.+/login/?$ .
+.TP
+.B allauth_count
+Number of allauth confirmation forms this session has submitted.
+.TP
+.B authn_request_count
+Number of SAML AuthnRequest forms this session has submitted.
+.TP
+.B mtls_location_re
+.TQ
+.B cert_hop_count
+Pattern for redirects handed to
+.B cert_hop
+(default: any https URL on port 9032), and how many hops were made.
+.TP
+.B cookie_file
+.TQ
+.B cookie_format
+.TQ
+.B cookie_save
+The constructor arguments of the same names, after
+.B ~
+expansion.
+.TP
+.B cookies_loaded
+Number of cookies read from
+.B cookie_file
+by the constructor.
+.TP
+.B login_count
+Number of login sequences this session has completed. Zero after a request
+that the loaded cookies satisfied outright, which is how
+.BR fermi_sso_probe (1)
+reports whether cookie reuse worked.
+.SH METHODS
+Beyond the inherited
+.B requests.Session
+interface:
+.TP
+.BI send( request ", " **kwargs )
+Overridden. Performs the request, then advances the login flow if needed.
+.TP
+.BI extract_login_url( response )
+Absolute URL of the login form, honoring any
+.B <base>
+tag.
+.TP
+.BI choose_adapter( response )
+Adapter id to select on the choose page for the session's
+.BR auth_method .
+.TP
+.BI extract_chose_url( response )
+Absolute URL that selects that adapter, query string included.
+.TP
+.BI extract_post_back_data( response )
+Returns
+.RI ( url ", " formdata )
+for the SAML postback form.
+.TP
+.BI is_allauth_sso_page( response )
+True when the response is an allauth confirmation page as defined under
+Flow.
+.TP
+.BI extract_allauth_form( response )
+Returns
+.RI ( url ", " formdata )
+for the confirmation form: the absolute URL it posts to and its hidden
+fields.
+.TP
+.BI is_saml_request_page( response )
+True when the response is an auto\-submitting SAML AuthnRequest form.
+.TP
+.BI extract_saml_request_form( response )
+Returns
+.RI ( url ", " formdata )
+for that form: the absolute identity provider URL and every field.
+.TP
+.BI load_cookies( path ", fmt=None, missing_ok=False)"
+Merge the cookies in
+.I path
+into the session jar, skipping expired ones, and return the number loaded.
+.I fmt
+is detected as for the constructor when
+.BR None .
+A missing file raises
+.B FileNotFoundError
+unless
+.B missing_ok
+is set, in which case 0 is returned.
+.TP
+.BI save_cookies( path ", fmt=None)"
+Write the unexpired cookies in the jar to
+.IR path ,
+creating it mode 0600 via a temporary file and rename, and return the number
+written. Session cookies, which have no expiry, are written with expiry 0
+rather than dropped as
+.B http.cookiejar
+would. With
+.I fmt
+.B None
+the format follows the extension, defaulting to Netscape.
+.SH HOPRESPONSE
+.B HopResponse(status, headers, body, set_cookies=())
+is what a
+.B cert_hop
+returns:
+.B status
+(int),
+.B headers
+(dict, lower\-cased names, last value of a repeated header),
+.B body
+(bytes), and
+.B set_cookies
+(every Set\-Cookie value, in order).
+.SH COOKIE FILE FORMATS
+.TP
+.B netscape
+The tab\-separated
+.I cookies.txt
+written by
+.BR curl (1)
+.BR \-c ,
+.BR wget (1),
+and the common browser export extensions. Seven fields per line: domain,
+include\-subdomains flag, path, secure flag, expiry (0 for a session cookie),
+name, value. HttpOnly cookies carry a
+.B #HttpOnly_
+prefix on the domain; this module reads and writes that prefix itself
+because
+.B http.cookiejar.MozillaCookieJar
+before Python 3.10 discards such lines as comments, which would drop exactly
+the SSO cookies that matter.
+.TP
+.B lwp
+The Set\-Cookie3 format of
+.BR http.cookiejar.LWPCookieJar .
+.TP
+.B json
+A list of objects with keys
+.BR name ", " value ", " domain ", " path ", " secure ", " httponly ", " host_only ", " expires
+(seconds since the epoch, or null for a session cookie). On input the
+camel\-case keys of the Cookie\-Editor and EditThisCookie browser extensions
+.RB ( expirationDate ", " httpOnly ", " hostOnly ", " session )
+are accepted too, as is a top\-level object with a
+.B cookies
+list.
+.SH FILES
+The library imposes no default path.
+.BR fermi_sso_probe (1)
+uses whatever
+.B \-\-cookie\-file
+or
+.B FERMI_SSO_COOKIE_FILE
+names.
+.SH RETURN VALUE
+.B send()
+returns a
+.B requests.Response
+for the final page of the sequence.
+.SH ERRORS
+A failed login is
+.B not
+signalled by an exception or a non\-2xx status. The identity provider
+re\-serves its login page with status 200, so the response looks ordinary.
+Callers must inspect the body; see
+.BR fermi_sso_probe (1),
+which implements that check.
+.PP
+A
+.B userpass
+value containing more than one colon raises
+.B ValueError
+from the constructor, because the password cannot be told from the
+delimiter.
+.SH EXAMPLES
+Fetch a protected page:
+.PP
+.RS
+.EX
+from requests_fermi_sso import FermiSSOSession
+
+s = FermiSSOSession(userpass="myaccount:mypassword")
+r = s.get("https://mu2e\-docdb.fnal.gov/cgi\-bin/sso/DocumentDatabase")
+if s.login_page_re.search(r.text):
+    raise SystemExit("login failed")
+print(r.text)
+.EE
+.RE
+.PP
+Cookies persist on the session, so later requests to the same service
+provider skip the login round trip entirely. The identity provider's own
+session cookie persists too, so a jar filled by logging in to one site
+usually signs the session in to a second site behind the same IdP with no
+login sequence at all; the second site's cookies are then added to the jar.
+.PP
+Log in with a Kerberos ticket instead of a password:
+.PP
+.RS
+.EX
+s = FermiSSOSession(auth_method="kerberos", cookie_file="~/.fermi_sso.cookies")
+r = s.get("https://mu2e\-docdb.fnal.gov/cgi\-bin/sso/DocumentDatabase")
+if r.status_code == 401:
+    raise SystemExit("Kerberos challenge not answered; check klist")
+.EE
+.RE
+.PP
+Log in once, then reuse the jar from a later process with no password:
+.PP
+.RS
+.EX
+# first run, or whenever the jar has gone stale
+s = FermiSSOSession(userpass="myaccount:mypassword",
+                    cookie_file="~/.fermi_sso.cookies")
+s.get("https://mu2e\-docdb.fnal.gov/cgi\-bin/sso/DocumentDatabase")
+
+# later runs
+s = FermiSSOSession(cookie_file="~/.fermi_sso.cookies")
+r = s.get("https://mu2e\-docdb.fnal.gov/cgi\-bin/DocDB/ShowDocument?docid=1234")
+if s.login_page_re.search(r.text):
+    raise SystemExit("cookies expired; run the password login again")
+.EE
+.RE
+.PP
+Use a browser session for an MFA\-enrolled account. In the browser, log in
+to the service provider, export its cookies with a cookies.txt extension,
+then:
+.PP
+.RS
+.EX
+s = FermiSSOSession(cookie_file="/path/to/cookies.txt", cookie_save=False)
+r = s.get("https://mu2e\-docdb.fnal.gov/cgi\-bin/sso/DocumentDatabase")
+.EE
+.RE
+.PP
+Sign in to a Django application that uses allauth in front of Fermilab SSO.
+The application's own sign\-in page is a menu; fetch the "Log in with
+Fermilab SSO" link's URL and the session handles the confirmation form, the
+identity provider, and the callback:
+.PP
+.RS
+.EX
+start = "https://mu2e\-talks.fnal.gov/accounts/oidc/keycloak/login/?next=%2F"
+r = s.get(start)          # lands on the dashboard
+.EE
+.RE
+.SH LIMITATIONS
+Only the
+.B ad..FormBased
+password adapter is driven; accounts requiring multi\-factor authentication
+cannot complete the login flow themselves and must supply cookies from a
+browser session instead. Where the service provider's connection demands a
+second factor regardless, as Workday's does (RSA SecurID after the
+password), the flow stops at the passcode form. JavaScript redirect pages,
+seen in front of Workday and ServiceNow, are not followed. The
+identity provider keeps separate sessions for its OIDC and SAML connections,
+so a jar filled at an OIDC site still needs one password login at the first
+SAML site. Cookie reuse lasts only as long as the service
+provider's session; the library does not know the lifetime in advance and
+detects expiry only by landing on the login page again. Page recognition is
+regular\-expression based and
+will break if the identity provider changes its markup. The session holds
+per\-login state and must not be shared across threads.
+.SH SEE ALSO
+.BR fermi_sso_probe (1),
+.BR fermi_sso_yubikey (3)
+.PP
+Project documentation:
+.I docs/HOWTO.md
+and
+.I docs/DEPENDENCIES.md
+in the source distribution.
+.SH AUTHOR
+Marc Mengel <mengel@fnal.gov>.
