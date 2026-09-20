@@ -9,7 +9,9 @@ import time
 import logging
 from html.parser import HTMLParser
 from typing import Dict, Iterable, List, Optional, Tuple
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urlencode, urljoin, urlsplit
+
+__version__ = "0.2.0"
 
 logger = logging.getLogger(__name__)
 
@@ -272,8 +274,7 @@ class FermiSSOSession(requests.Session):
         m = self.choose_page_re.search(res.text)
         if m:
             self.logging_in_already = True
-            ("got Choose page...")
-            # got choose_auth page...
+            logger.debug("got Choose page...")
             url = self.extract_chose_url(res)
             logger.debug(f"trying to choose by calling {url} ")
             if self.auth_method == "yubikey":
@@ -511,10 +512,15 @@ class FermiSSOSession(requests.Session):
         if mb:
             base = mb.group(1)
 
-        packed_form_data = "&".join([f"{k}={v}" for k, v in formdata.items()])
+        # urlencode, not a hand-rolled join: for kerberos and yubikey the
+        # adapter id is read straight out of the page's <option> list
+        packed_form_data = urlencode(formdata)
         # use a regexp to find the <form> tag in the page
         m = self.choose_page_re.search(resp.text)
-        assert m
+        if not m:
+            # only reachable if a caller invokes this on a page send() never
+            # matched; an assert here vanished under python -O
+            raise ValueError("no choose-authentication form in response")
         return base + m.group(1) + "?" + packed_form_data
 
     # ------------------------------------------------------------------

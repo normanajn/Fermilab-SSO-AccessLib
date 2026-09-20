@@ -38,10 +38,12 @@ from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
 from requests_fermi_sso import HopResponse
+from requests_fermi_sso import __version__ as _lib_version
 
 logger = logging.getLogger(__name__)
 
-__version__ = "0.2.0"
+#: single source of truth lives in the library module
+__version__ = _lib_version
 
 ENV_OPENSSL = "FERMI_SSO_OPENSSL"
 ENV_ENGINES_DIR = "FERMI_SSO_ENGINES_DIR"

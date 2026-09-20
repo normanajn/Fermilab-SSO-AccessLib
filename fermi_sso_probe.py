@@ -33,8 +33,10 @@ import sys
 from typing import Dict, List, Optional, Tuple
 
 from requests_fermi_sso import FermiSSOSession
+from requests_fermi_sso import __version__ as _lib_version
 
-__version__ = "0.2.0"
+#: single source of truth lives in the library module
+__version__ = _lib_version
 
 #: Fetched when no URL is given. The Mu2e DocDB SSO entry point; note that
 #: https://mu2e-docdb.fnal.gov/ itself is an unprotected landing page and

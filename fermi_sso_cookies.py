@@ -38,6 +38,7 @@ from fermi_sso_probe import (
     load_env_file,
     resolve,
 )
+from requests_fermi_sso import __version__ as _lib_version
 from requests_fermi_sso import (
     COOKIE_FORMATS,
     _is_httponly,
@@ -47,7 +48,8 @@ from requests_fermi_sso import (
     parse_netscape_cookies,
 )
 
-__version__ = "0.2.0"
+#: single source of truth lives in the library module
+__version__ = _lib_version
 
 #: Session cookies and cookies expiring within this many seconds are marked
 #: "soon" in the table view.

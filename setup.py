@@ -1,7 +1,18 @@
 from setuptools import setup, find_packages
 import pathlib
+import re
 
 here = pathlib.Path(__file__).parent.resolve()
+
+
+def read_version():
+    """The version from requests_fermi_sso.py, without importing it (that
+    would need requests at build time)."""
+    text = (here / "requests_fermi_sso.py").read_text(encoding="utf-8")
+    match = re.search(r'^__version__ = "([^"]+)"', text, re.M)
+    if not match:
+        raise RuntimeError("no __version__ in requests_fermi_sso.py")
+    return match.group(1)
 
 
 def wrap_find_packages(*args, **kwargs):
@@ -20,7 +31,7 @@ setup(
         "fermi_sso_yubikey",
         "fermi_sso_cookies",
     ],
-    version="0.2.0",
+    version=read_version(),
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="Marc Mengel",

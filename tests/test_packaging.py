@@ -64,3 +64,50 @@ def test_the_running_interpreter_satisfies_python_requires():
     floor = setup_kwargs()["python_requires"]
     major, minor = (int(part) for part in floor[2:].split(".")[:2])
     assert sys.version_info[:2] >= (major, minor)
+
+
+# --------------------------------------------------------------------------
+# version
+# --------------------------------------------------------------------------
+
+
+def test_the_library_module_exposes_a_version():
+    """`from requests_fermi_sso import __version__` is what a consumer
+    reaches for first, and it used to raise ImportError."""
+    import requests_fermi_sso
+
+    assert isinstance(requests_fermi_sso.__version__, str)
+    assert requests_fermi_sso.__version__
+
+
+def test_every_module_reports_the_same_version():
+    import fermi_sso_cookies
+    import fermi_sso_probe
+    import fermi_sso_yubikey
+    import requests_fermi_sso
+
+    versions = {
+        m.__name__: m.__version__
+        for m in (
+            requests_fermi_sso,
+            fermi_sso_probe,
+            fermi_sso_yubikey,
+            fermi_sso_cookies,
+        )
+    }
+    assert len(set(versions.values())) == 1, versions
+
+
+def test_setup_py_reports_the_library_version():
+    import re
+    import subprocess
+
+    import requests_fermi_sso
+
+    out = subprocess.run(
+        [sys.executable, SETUP_PY, "--version"],
+        capture_output=True,
+        text=True,
+        cwd=os.path.dirname(SETUP_PY),
+    ).stdout
+    assert out.strip().splitlines()[-1] == requests_fermi_sso.__version__
