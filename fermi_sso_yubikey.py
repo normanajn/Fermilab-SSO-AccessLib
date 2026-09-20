@@ -25,6 +25,7 @@ FERMI_SSO_PKCS11_KEY, FERMI_SSO_PIN_SOURCE, FERMI_SSO_PKCS11_TOOL.
 See fermi_sso_yubikey(3) and docs/HOWTO.md.
 """
 
+import atexit
 import glob
 import logging
 import os
@@ -32,6 +33,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import weakref
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
@@ -132,6 +134,32 @@ class YubiKeyCertHop:
         self._tmpdir = None
         self.last_command: List[str] = []
         self.last_stderr = ""
+        # ensure_cert_pem() may create a temp directory; it has to go away
+        # again even when the hop is handed to FermiSSOSession as a bare
+        # callable and the caller never holds a reference to close.
+        self._finalizer = None
+
+    # ------------------------------------------------------------------
+    # lifetime
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _cleanup(tmpdir):
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def close(self):
+        """Remove the exported certificate and its temp directory."""
+        if self._finalizer is not None:
+            self._finalizer()
+            self._finalizer = None
+        self._tmpdir = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        self.close()
+        return False
 
     # ------------------------------------------------------------------
     # readiness
@@ -230,7 +258,12 @@ class YubiKeyCertHop:
             raise RuntimeError(
                 "cannot export the certificate: pkcs11-tool or the PKCS#11 module is missing"
             )
-        self._tmpdir = self._tmpdir or tempfile.mkdtemp(prefix="fermi-sso-yk-")
+        if self._tmpdir is None:
+            self._tmpdir = tempfile.mkdtemp(prefix="fermi-sso-yk-")
+            # runs at garbage collection, and at interpreter exit for a hop
+            # that is still alive then
+            self._finalizer = weakref.finalize(self, self._cleanup, self._tmpdir)
+            atexit.register(self._finalizer)
         der = os.path.join(self._tmpdir, "piv-9a.der")
         pem = os.path.join(self._tmpdir, "piv-9a.pem")
         cmd = [
