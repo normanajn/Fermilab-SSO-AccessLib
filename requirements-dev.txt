@@ -2,3 +2,4 @@
 # Install with: pip install -r requirements-dev.txt
 -r requirements.txt
 pytest
+trove-classifiers   # validates setup.py classifiers in tests/test_packaging.py

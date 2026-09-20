@@ -29,9 +29,17 @@ setup(
         "Development Status :: 3 - Alpha",
         # Indicate who your project is intended for
         "Intended Audience :: Developers",
-        "License :: OSI Approved :: Apache 2.0 License",
+        "License :: OSI Approved :: Apache Software License",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
     ],
-    python_requires=">=3.6",
+    # 3.9 is the floor the project supports. Note the f"{x=}" form in
+    # requests_fermi_sso.py is 3.8+, so anything lower does not merely lack
+    # features, it fails at import.
+    python_requires=">=3.9",
     install_requires=["requests"],
     extras_require={"test": ["pytest"], "kerberos": ["requests-gssapi"]},
     entry_points={
