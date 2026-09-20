@@ -348,10 +348,17 @@ class FermiSSOSession(requests.Session):
             res = requests.Session.post(self, url, data=formdata)
             hops += 1
             performed_login = True
-        if hops >= MAX_POSTBACK_HOPS:
+        if (
+            hops >= MAX_POSTBACK_HOPS
+            and self._is_scannable(res)
+            and self.postback_form_re.search(res.text)
+        ):
+            # still another one pending, so we stopped on the bound rather
+            # than because the chain ended
             logger.warning(
-                f"stopped after {MAX_POSTBACK_HOPS} SAML postbacks; the "
-                "identity provider and the service provider may be looping"
+                f"stopped after {MAX_POSTBACK_HOPS} SAML postbacks with "
+                "another still pending; the identity provider and the "
+                "service provider may be looping"
             )
 
         if performed_login:

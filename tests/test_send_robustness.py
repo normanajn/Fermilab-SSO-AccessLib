@@ -254,3 +254,47 @@ def test_a_response_without_a_content_type_is_still_scanned():
     resp = session.get("https://site/page")
     # no credentials, so the walk stops at the login form -- but it was seen
     assert session.login_page_re.search(resp.text)
+
+
+def test_a_chain_that_ends_on_the_last_hop_does_not_warn(caplog):
+    """The bound is not a problem unless a form is still pending when we
+    stop on it."""
+
+    class ExactChain(BaseAdapter):
+        def __init__(self):
+            self.posts = 0
+
+        def send(self, request, **kwargs):
+            if request.method == "GET":
+                return html(request, postback("https://sp/hop0"))
+            self.posts += 1
+            if self.posts < MAX_POSTBACK_HOPS:
+                return html(request, postback(f"https://sp/hop{self.posts}"))
+            return html(request, "<html><body>done</body></html>")
+
+        def close(self):
+            pass
+
+    session = FermiSSOSession()
+    session.mount("https://", ExactChain())
+    with caplog.at_level("WARNING"):
+        resp = session.get("https://sp/protected")
+
+    assert "done" in resp.text
+    assert "looping" not in caplog.text
+
+
+def test_a_real_loop_does_warn(caplog):
+    class Loop(BaseAdapter):
+        def send(self, request, **kwargs):
+            return html(request, postback("https://sp/acs"))
+
+        def close(self):
+            pass
+
+    session = FermiSSOSession()
+    session.mount("https://", Loop())
+    with caplog.at_level("WARNING"):
+        session.get("https://sp/x")
+
+    assert "looping" in caplog.text
