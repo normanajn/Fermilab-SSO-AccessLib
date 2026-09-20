@@ -438,6 +438,41 @@ def test_main_writes_body_to_output_file(monkeypatch, tmp_path, capsys):
     assert "DocDB Home" in out.read_text()
 
 
+def test_main_writes_a_binary_body_byte_for_byte(monkeypatch, tmp_path):
+    """-o used to go through resp.text, so any attachment came out corrupt."""
+    import requests
+    from requests.adapters import BaseAdapter
+
+    body = b"%PDF-1.4\n" + bytes(range(256)) * 64 + b"\n%%EOF\n"
+
+    class PdfAdapter(BaseAdapter):
+        def send(self, request, **kwargs):
+            resp = requests.Response()
+            resp.status_code = 200
+            resp.url = request.url
+            resp.request = request
+            resp._content = body
+            resp.headers["Content-Type"] = "application/pdf"
+            return resp
+
+        def close(self):
+            pass
+
+    real = probe.FermiSSOSession
+
+    def factory(*args, **kwargs):
+        session = real(*args, **kwargs)
+        session.mount("https://", PdfAdapter())
+        return session
+
+    monkeypatch.setattr(probe, "FermiSSOSession", factory)
+    out = tmp_path / "doc.pdf"
+    argv = ["--no-env-file", "-u", "u", "-p", "p", "-o", str(out), TARGET]
+
+    assert probe.main(argv) == 0
+    assert out.read_bytes() == body
+
+
 def _patch_session(monkeypatch):
     """Make probe.main build sessions bound to the scripted adapter."""
     from conftest import ScriptedAdapter, sso_handler

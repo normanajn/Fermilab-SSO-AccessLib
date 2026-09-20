@@ -565,7 +565,7 @@ def main(argv=None) -> int:
         warn("")
         warn(f"final url : {resp.url}")
         warn(f"status    : {resp.status_code}")
-        warn(f"bytes     : {len(resp.text)}")
+        warn(f"bytes     : {len(resp.content)}")
         warn(f"cookies   : {sorted(c.name for c in session.cookies)}")
         warn(f"redirects : {[h.status_code for h in resp.history]}")
         if session.login_count:
@@ -582,13 +582,17 @@ def main(argv=None) -> int:
         warn("")
 
     if args.output:
+        # bytes, not resp.text: the body may be a PDF or any other
+        # attachment, and decoding it to text and re-encoding as UTF-8 does
+        # not round-trip
         if args.output == "-":
-            sys.stdout.write(resp.text)
+            sys.stdout.buffer.write(resp.content)
+            sys.stdout.buffer.flush()
         else:
-            with open(args.output, "w", encoding="utf-8") as handle:
-                handle.write(resp.text)
+            with open(args.output, "wb") as handle:
+                handle.write(resp.content)
             if not args.quiet:
-                warn(f"body written to {args.output}")
+                warn(f"body written to {args.output} ({len(resp.content)} bytes)")
 
     if ok:
         warn("RESULT: login SUCCEEDED")
