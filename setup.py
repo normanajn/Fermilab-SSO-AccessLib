@@ -61,7 +61,14 @@ setup(
         ],
     },
     data_files=[
-        ("share/man/man1", ["man/fermi_sso_probe.1", "man/fermi_sso_cookies.1"]),
+        (
+            "share/man/man1",
+            [
+                "man/fermi_sso_probe.1",
+                "man/fermi_sso_cookies.1",
+                "man/bootstrap.sh.1",
+            ],
+        ),
         ("share/man/man3", ["man/FermiSSOSession.3", "man/fermi_sso_yubikey.3"]),
     ],
 )
