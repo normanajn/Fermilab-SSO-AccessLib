@@ -133,6 +133,8 @@ fermi-sso-cookies -D pingprod.fnal.gov -l ~/.fermi_sso.cookies   # is the IdP se
 - [docs/EXAMPLES.md](docs/EXAMPLES.md) — copy-paste recipes for DocDB, the shift scheduler, Mu2eTalks, ServiceNow, Kerberos, and the YubiKey
 - [docs/HOWTO.md](docs/HOWTO.md) — install, credentials, troubleshooting
 - [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) — external dependencies per authentication method, with install commands per platform
+- `examples/` — small hand-run scripts; start with `check_cdcvs_login.py`
+- `man ./man/bootstrap.sh.1` — the bootstrap script
 - `man ./man/fermi_sso_probe.1` — the probe utility
 - `man ./man/fermi_sso_cookies.1` — the cookie jar inspector
 - `man ./man/FermiSSOSession.3` — the library API
@@ -149,10 +151,17 @@ credentials are needed.
 
 ### Limitations
 
-Only the `ad..FormBased` password adapter is driven, so accounts enrolled in
-MFA cannot complete this flow themselves — that is what the "special account"
-above is for, or else a browser login whose cookies are exported and passed
-in via `cookie_file`. Saved cookies last only as long as the site's session;
-expiry shows up as a login page, not an error. Page recognition is regex-based
-and will break if the identity provider changes its markup. Sessions hold
-per-login state and are not thread-safe.
+Four adapters are driven: the `ad..FormBased` password adapter, the Kerberos
+adapter under whichever id the connection offers it, and the FNAL Yubikey and
+HSPD-12 hardware-token adapters. An interactive second factor is not among
+them — an account enrolled in MFA cannot complete the password flow itself, so
+that is what the "special account" above is for, or else a browser login whose
+cookies are exported and passed in via `cookie_file`. PingFederate's RSA
+SecurID form is recognized and reported, not answered.
+
+Saved cookies last only as long as the site's session; expiry shows up as a
+login page, not an error. Page recognition is regex-based and will break if
+the identity provider changes its markup. Only HTML responses under 2 MB are
+inspected for login forms, so a protected download that is served without an
+intervening login page is passed through untouched. Sessions hold per-login
+state and are not thread-safe.

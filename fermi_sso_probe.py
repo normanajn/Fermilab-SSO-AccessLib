@@ -33,8 +33,10 @@ import sys
 from typing import Dict, List, Optional, Tuple
 
 from requests_fermi_sso import FermiSSOSession
+from requests_fermi_sso import __version__ as _lib_version
 
-__version__ = "0.2.0"
+#: single source of truth lives in the library module
+__version__ = _lib_version
 
 #: Fetched when no URL is given. The Mu2e DocDB SSO entry point; note that
 #: https://mu2e-docdb.fnal.gov/ itself is an unprotected landing page and
@@ -509,13 +511,6 @@ def main(argv=None) -> int:
         warn(f"error: no username; pass --user or set ${ENV_USER}")
         return 2
 
-    if password and ":" in password:
-        # FermiSSOSession splits "user:pass" on every colon and unpacks the
-        # result into two names, so an embedded colon raises ValueError in
-        # its __init__. Report it here rather than as a traceback.
-        warn("error: password contains ':', which requests_fermi_sso cannot parse")
-        return 2
-
     if debug:
         enable_debug()
 
@@ -572,7 +567,7 @@ def main(argv=None) -> int:
         warn("")
         warn(f"final url : {resp.url}")
         warn(f"status    : {resp.status_code}")
-        warn(f"bytes     : {len(resp.text)}")
+        warn(f"bytes     : {len(resp.content)}")
         warn(f"cookies   : {sorted(c.name for c in session.cookies)}")
         warn(f"redirects : {[h.status_code for h in resp.history]}")
         if session.login_count:
@@ -589,13 +584,17 @@ def main(argv=None) -> int:
         warn("")
 
     if args.output:
+        # bytes, not resp.text: the body may be a PDF or any other
+        # attachment, and decoding it to text and re-encoding as UTF-8 does
+        # not round-trip
         if args.output == "-":
-            sys.stdout.write(resp.text)
+            sys.stdout.buffer.write(resp.content)
+            sys.stdout.buffer.flush()
         else:
-            with open(args.output, "w", encoding="utf-8") as handle:
-                handle.write(resp.text)
+            with open(args.output, "wb") as handle:
+                handle.write(resp.content)
             if not args.quiet:
-                warn(f"body written to {args.output}")
+                warn(f"body written to {args.output} ({len(resp.content)} bytes)")
 
     if ok:
         warn("RESULT: login SUCCEEDED")

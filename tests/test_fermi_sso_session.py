@@ -250,14 +250,21 @@ def test_no_userpass_leaves_form_data_unset():
     assert FermiSSOSession().login_form_data is None
 
 
-def test_password_containing_a_colon_is_rejected():
+def test_a_colon_in_the_password_is_kept():
     """
-    Known limitation: __init__ does userpass.split(":") and unpacks into two
-    names, so any colon in the password raises. fermi_sso_probe checks for
-    this up front to turn it into a clear error message.
+    userpass splits on the first colon only. Splitting on every one of them
+    used to raise ValueError out of __init__, which fermi_sso_probe had to
+    screen for before constructing a session.
     """
-    with pytest.raises(ValueError):
-        FermiSSOSession(userpass="alice:hunter:2")
+    form = FermiSSOSession(userpass="alice:hunter:2").login_form_data
+    assert form["pf.username"] == "alice"
+    assert form["pf.pass"] == "hunter:2"
+
+
+def test_an_empty_password_is_kept():
+    form = FermiSSOSession(userpass="alice:").login_form_data
+    assert form["pf.username"] == "alice"
+    assert form["pf.pass"] == ""
 
 
 def test_session_is_a_requests_session():

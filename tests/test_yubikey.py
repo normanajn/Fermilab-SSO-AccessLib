@@ -4,6 +4,10 @@ replaces following the redirect to the mutual-TLS listener, cookie
 absorption from the hop, the helper's HTTP plumbing, and probe wiring.
 """
 
+import gc
+import os
+import subprocess
+
 import pytest
 import requests
 
@@ -364,3 +368,90 @@ def test_probe_yubikey_stops_when_prerequisites_are_missing(monkeypatch, capsys)
     monkeypatch.setattr(fermi_sso_yubikey, "YubiKeyCertHop", NotReady)
     assert probe.main(["--no-env-file", "-n", "-a", "yubikey", OIDC_TARGET]) == 2
     assert "prerequisite missing: openssl" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# temp directory lifetime
+# --------------------------------------------------------------------------
+
+
+def _hop_with_exported_cert(tmp_path):
+    """
+    A hop whose certificate export is faked, so ensure_cert_pem() creates
+    its temp directory without a token being present.
+    """
+    hop = yk.YubiKeyCertHop(
+        openssl_bin=str(tmp_path / "openssl"),
+        pkcs11_tool=str(tmp_path / "pkcs11-tool"),
+        module_path=str(tmp_path / "module.so"),
+    )
+
+    def fake_run(cmd, **kwargs):
+        # write whatever output file the command asked for
+        if "-o" in cmd:
+            open(cmd[cmd.index("-o") + 1], "wb").close()
+        if "-out" in cmd:
+            open(cmd[cmd.index("-out") + 1], "wb").close()
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    return hop, fake_run
+
+
+def test_close_removes_the_exported_certificate(tmp_path, monkeypatch):
+
+    hop, fake_run = _hop_with_exported_cert(tmp_path)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    pem = hop.ensure_cert_pem()
+    tmpdir = os.path.dirname(pem)
+    assert os.path.isdir(tmpdir)
+
+    hop.close()
+    assert not os.path.exists(tmpdir)
+
+
+def test_close_is_idempotent(tmp_path, monkeypatch):
+
+    hop, fake_run = _hop_with_exported_cert(tmp_path)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    hop.ensure_cert_pem()
+    hop.close()
+    hop.close()  # must not raise
+
+
+def test_the_hop_works_as_a_context_manager(tmp_path, monkeypatch):
+
+    hop, fake_run = _hop_with_exported_cert(tmp_path)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with hop as entered:
+        assert entered is hop
+        tmpdir = os.path.dirname(hop.ensure_cert_pem())
+        assert os.path.isdir(tmpdir)
+
+    assert not os.path.exists(tmpdir)
+
+
+def test_the_directory_goes_away_when_the_hop_is_collected(tmp_path, monkeypatch):
+    """The case that leaked: the hop is passed to FermiSSOSession as a bare
+    callable and the caller never keeps a reference to close."""
+    hop, fake_run = _hop_with_exported_cert(tmp_path)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    tmpdir = os.path.dirname(hop.ensure_cert_pem())
+    assert os.path.isdir(tmpdir)
+
+    del hop
+    gc.collect()
+
+    assert not os.path.exists(tmpdir)
+
+
+def test_a_caller_supplied_certificate_is_not_removed(tmp_path):
+    """cert_pem given by the caller is theirs; close() must not delete it."""
+    pem = tmp_path / "mine.pem"
+    pem.write_text("-----BEGIN CERTIFICATE-----\n")
+    hop = yk.YubiKeyCertHop(cert_pem=str(pem))
+
+    assert hop.ensure_cert_pem() == str(pem)
+    hop.close()
+    assert pem.exists()

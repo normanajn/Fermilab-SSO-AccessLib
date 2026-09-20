@@ -9,7 +9,9 @@ import time
 import logging
 from html.parser import HTMLParser
 from typing import Dict, Iterable, List, Optional, Tuple
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urlencode, urljoin, urlsplit
+
+__version__ = "0.2.0"
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +45,21 @@ YUBIKEY_ADAPTER_ORDER = (
 #: Redirect targets handed to the certificate hop instead of being followed:
 #: the IdP's mutual-TLS listener, which lives on its own port.
 MTLS_LOCATION_RE = re.compile(r"^https://[^/]+:9032/", re.I)
+
+#: Content types the identity provider serves its forms as. A response of
+#: any other type cannot be a stage of the login sequence, so its body is
+#: never decoded or scanned.
+HTML_CONTENT_TYPES = ("text/html", "application/xhtml+xml")
+
+#: Bodies larger than this are not scanned for login forms. Every page in the
+#: sequence is a few tens of kB; anything this large is a payload, and
+#: decoding it to text just to run six regexes over it is what made
+#: stream=True useless for document downloads.
+MAX_SCAN_BYTES = 2 * 1024 * 1024
+
+#: Most flows post back once. A few chain a second time through an
+#: intermediate assertion consumer; anything beyond that is a loop.
+MAX_POSTBACK_HOPS = 4
 
 _NETSCAPE_HEADER = "# Netscape HTTP Cookie File"
 _LWP_HEADER = "#LWP-Cookies-2.0"
@@ -96,7 +113,9 @@ class FermiSSOSession(requests.Session):
         """
 
         if "userpass" in kwargs:
-            username, passwd = kwargs["userpass"].split(":")
+            # split once: a colon is legal in a password, and splitting on
+            # every one of them used to raise ValueError out of __init__
+            username, _, passwd = kwargs["userpass"].partition(":")
             self.login_form_data = {
                 "pf.username": username,
                 "pf.pass": passwd,
@@ -199,7 +218,31 @@ class FermiSSOSession(requests.Session):
         jar_before = self._jar_signature()
         res = requests.Session.send(self, req, **send_kwargs)
         logger.debug(f"returning {res=}")
+        # Everything below may set logging_in_already and may raise -- a
+        # transport error on a nested request, a malformed form, a failed
+        # certificate hop. The flag has to be cleared on the way out either
+        # way; leaving it set turns this session into a plain Session that
+        # never logs in again, silently.
+        try:
+            return self._run_login_sequence(res, jar_before)
+        finally:
+            self.logging_in_already = False
+
+    def _run_login_sequence(self, res, jar_before):
+        """
+        Walk whatever stage of the SSO sequence res represents.
+
+        Called by send() with the re-entrancy flag clear, and always under
+        the try/finally there that clears it again.
+        """
         performed_login = False
+
+        if not self._is_scannable(res):
+            # Not a page that could carry an SSO form. Skip the body
+            # entirely -- see _is_scannable -- but still persist any cookies
+            # the redirect chain picked up.
+            self._save_jar_if_changed(jar_before, performed_login)
+            return res
 
         if self.is_allauth_sso_page(res):
             self.logging_in_already = True
@@ -226,14 +269,12 @@ class FermiSSOSession(requests.Session):
                 "identity provider is throttling sign-ons (Multiple Sign-On "
                 "Delay); returning that page unanswered"
             )
-            self.logging_in_already = False
             return res
 
         m = self.choose_page_re.search(res.text)
         if m:
             self.logging_in_already = True
-            ("got Choose page...")
-            # got choose_auth page...
+            logger.debug("got Choose page...")
             url = self.extract_chose_url(res)
             logger.debug(f"trying to choose by calling {url} ")
             if self.auth_method == "yubikey":
@@ -286,36 +327,92 @@ class FermiSSOSession(requests.Session):
         # SAML flows end with an auto-submitting postback form. OIDC flows end
         # with a 302 to the client's redirect_uri, which requests has already
         # followed by this point, so there is nothing more to do for them.
-        m = self.postback_form_re.search(res.text)
-        if m:
+        #
+        # Guarded like the other branches, so the nested send() does not walk
+        # the sequence a second time and count the sign-on twice. That makes
+        # a chained postback -- where the assertion consumer answers with
+        # another one -- this frame's job, hence the loop rather than a
+        # single if.
+        hops = 0
+        while (
+            hops < MAX_POSTBACK_HOPS
+            and self._is_scannable(res)
+            and self.postback_form_re.search(res.text)
+        ):
             logger.debug("saw Postback form...")
             logger.debug(f"cookies: {repr(self.cookies)}")
             logger.debug(res.text)
             logger.debug("=-=-=-=-=-=-=-=")
+            self.logging_in_already = True
             url, formdata = self.extract_post_back_data(res)
             res = requests.Session.post(self, url, data=formdata)
+            hops += 1
             performed_login = True
+        if (
+            hops >= MAX_POSTBACK_HOPS
+            and self._is_scannable(res)
+            and self.postback_form_re.search(res.text)
+        ):
+            # still another one pending, so we stopped on the bound rather
+            # than because the chain ended
+            logger.warning(
+                f"stopped after {MAX_POSTBACK_HOPS} SAML postbacks with "
+                "another still pending; the identity provider and the "
+                "service provider may be looping"
+            )
 
         if performed_login:
             self.login_count += 1
 
-        # Persist the jar whenever this request changed it: after a login,
-        # but also when the IdP's own session cookie let a second site sign
-        # us in via a plain redirect chain with no login sequence at all.
-        # An unchanged jar -- typically a reused browser export -- is left
-        # alone.
-        if (
-            self.cookie_file
-            and self.cookie_save
-            and (performed_login or self._jar_signature() != jar_before)
-        ):
-            try:
-                self.save_cookies(self.cookie_file, self.cookie_format)
-            except OSError as exc:
-                logger.warning(f"could not save cookies to {self.cookie_file}: {exc}")
-
-        self.logging_in_already = False
+        self._save_jar_if_changed(jar_before, performed_login)
         return res
+
+    def _save_jar_if_changed(self, jar_before, performed_login):
+        """
+        Persist the jar whenever this request changed it: after a login, but
+        also when the IdP's own session cookie let a second site sign us in
+        via a plain redirect chain with no login sequence at all. An
+        unchanged jar -- typically a reused browser export -- is left alone.
+        """
+        if not (self.cookie_file and self.cookie_save):
+            return
+        if not (performed_login or self._jar_signature() != jar_before):
+            return
+        try:
+            self.save_cookies(self.cookie_file, self.cookie_format)
+        except OSError as exc:
+            logger.warning(f"could not save cookies to {self.cookie_file}: {exc}")
+
+    def _is_scannable(self, res):
+        """
+        True when res could be a stage of the login sequence.
+
+        Reading res.text forces the whole body into memory and marks the
+        response consumed, which defeats stream=True and, on a DocDB
+        attachment, can mean gigabytes. The identity provider only ever
+        serves HTML, and only small HTML, so a response that is neither is
+        passed straight through untouched.
+
+        A response with no Content-Type is scanned, as before: absent the
+        header there is nothing to rule it out on.
+        """
+        ctype = res.headers.get("Content-Type", "")
+        if ctype:
+            main = ctype.split(";")[0].strip().lower()
+            if main and main not in HTML_CONTENT_TYPES:
+                logger.debug(f"not scanning a {main} response for login forms")
+                return False
+        length = res.headers.get("Content-Length")
+        if length:
+            try:
+                if int(length) > MAX_SCAN_BYTES:
+                    logger.debug(
+                        f"not scanning a {length}-byte response for login forms"
+                    )
+                    return False
+            except ValueError:
+                pass
+        return True
 
     def _jar_signature(self):
         """Hashable snapshot of the jar, for change detection."""
@@ -422,10 +519,15 @@ class FermiSSOSession(requests.Session):
         if mb:
             base = mb.group(1)
 
-        packed_form_data = "&".join([f"{k}={v}" for k, v in formdata.items()])
+        # urlencode, not a hand-rolled join: for kerberos and yubikey the
+        # adapter id is read straight out of the page's <option> list
+        packed_form_data = urlencode(formdata)
         # use a regexp to find the <form> tag in the page
         m = self.choose_page_re.search(resp.text)
-        assert m
+        if not m:
+            # only reachable if a caller invokes this on a page send() never
+            # matched; an assert here vanished under python -O
+            raise ValueError("no choose-authentication form in response")
         return base + m.group(1) + "?" + packed_form_data
 
     # ------------------------------------------------------------------

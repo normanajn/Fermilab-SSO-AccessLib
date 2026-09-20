@@ -1,0 +1,105 @@
+.TH BOOTSTRAP.SH 1 "2026-09-20" "requests-fermi-sso 0.2.0" "User Commands"
+.SH NAME
+bootstrap.sh \- create the virtual environment, install dependencies, run the tests
+.SH SYNOPSIS
+.B ./bootstrap.sh
+.RI [ \-\-no\-test ]
+.br
+.B ./bootstrap.sh
+.RB [ \-h | \-\-help ]
+.SH DESCRIPTION
+.B bootstrap.sh
+prepares a working checkout of
+.BR requests-fermi-sso .
+It creates a virtual environment in
+.I venv/
+beside the script if one is not there already, upgrades
+.BR pip ,
+installs the package in editable mode together with its test extra, and
+runs the test suite.
+.PP
+It is safe to re-run: an existing
+.I venv/
+is updated in place rather than recreated, so this is also the way to pick
+up changed dependencies.
+.PP
+The script is POSIX
+.BR sh ,
+runs under
+.BR set -eu ,
+and stops at the first failing step. It understands the Windows virtual
+environment layout, using
+.I venv/Scripts/python.exe
+where
+.I venv/bin/python
+does not exist.
+.SH OPTIONS
+.TP
+.B \-\-no\-test
+Set up the environment but do not run the test suite. Useful on a machine
+where the checkout is only being prepared, not verified.
+.TP
+.BR \-h ", " \-\-help
+Print the usage summary from the top of the script and exit.
+.SH ENVIRONMENT
+.TP
+.B PYTHON
+Interpreter used to create the virtual environment. Defaults to
+.BR python3 .
+Set this to build against a specific version, for example
+.B PYTHON=python3.9
+to check the supported floor.
+.SH EXIT STATUS
+.TP
+.B 0
+The environment is ready and, unless
+.B \-\-no\-test
+was given, the tests passed.
+.TP
+.B 2
+An unrecognized option was given.
+.PP
+Any other non-zero status is the failing step's own: interpreter missing,
+.B pip
+unable to install, or the test suite failing.
+.SH FILES
+.TP
+.I venv/
+The virtual environment, created and updated here.
+.TP
+.I requirements.txt
+Runtime dependencies.
+.TP
+.I requirements-dev.txt
+Development and test dependencies.
+.SH EXAMPLES
+Prepare a checkout and verify it:
+.PP
+.RS 4
+.nf
+\&./bootstrap.sh
+.fi
+.RE
+.PP
+Prepare it without running the suite, then activate it:
+.PP
+.RS 4
+.nf
+\&./bootstrap.sh \-\-no\-test
+\&. venv/bin/activate
+.fi
+.RE
+.PP
+Check that the package still builds and tests on the oldest supported
+interpreter:
+.PP
+.RS 4
+.nf
+PYTHON=python3.9 ./bootstrap.sh
+.fi
+.RE
+.SH SEE ALSO
+.BR fermi_sso_probe (1),
+.BR fermi_sso_cookies (1),
+.BR FermiSSOSession (3),
+.BR fermi_sso_yubikey (3)
