@@ -509,13 +509,6 @@ def main(argv=None) -> int:
         warn(f"error: no username; pass --user or set ${ENV_USER}")
         return 2
 
-    if password and ":" in password:
-        # FermiSSOSession splits "user:pass" on every colon and unpacks the
-        # result into two names, so an embedded colon raises ValueError in
-        # its __init__. Report it here rather than as a traceback.
-        warn("error: password contains ':', which requests_fermi_sso cannot parse")
-        return 2
-
     if debug:
         enable_debug()
 

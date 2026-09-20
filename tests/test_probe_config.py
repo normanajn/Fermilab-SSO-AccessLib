@@ -384,11 +384,23 @@ def test_main_errors_without_a_password(monkeypatch, tmp_path, capsys):
     assert "no password" in capsys.readouterr().err
 
 
-def test_main_rejects_a_colon_in_the_password(monkeypatch, tmp_path, capsys):
-    monkeypatch.chdir(tmp_path)
-    argv = ["--no-env-file", "-n", "-u", "alice", "-p", "has:colon"]
-    assert probe.main(argv) == 2
-    assert "contains ':'" in capsys.readouterr().err
+def test_main_accepts_a_colon_in_the_password(monkeypatch, tmp_path, capsys):
+    """The probe used to reject these up front because the library could not
+    parse them. It can now, so the password is passed through as given."""
+    _patch_session(monkeypatch)
+    seen = {}
+
+    real = probe.FermiSSOSession
+
+    def factory(*args, **kwargs):
+        seen["userpass"] = kwargs.get("userpass")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(probe, "FermiSSOSession", factory)
+    argv = ["--no-env-file", "-u", "testuser", "-p", "has:colon", TARGET]
+
+    assert probe.main(argv) == 0
+    assert seen["userpass"] == "testuser:has:colon"
 
 
 def test_main_errors_on_missing_explicit_env_file(tmp_path, capsys):

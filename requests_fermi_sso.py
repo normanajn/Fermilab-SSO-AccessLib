@@ -111,7 +111,9 @@ class FermiSSOSession(requests.Session):
         """
 
         if "userpass" in kwargs:
-            username, passwd = kwargs["userpass"].split(":")
+            # split once: a colon is legal in a password, and splitting on
+            # every one of them used to raise ValueError out of __init__
+            username, _, passwd = kwargs["userpass"].partition(":")
             self.login_form_data = {
                 "pf.username": username,
                 "pf.pass": passwd,
