@@ -100,7 +100,9 @@ With
 .B kerberos
 the local ticket cache answers the identity provider's Negotiate challenge
 through
-.BR requests\-gssapi .
+.BR requests\-gssapi ;
+the ticket must be in the FERMI.WIN.FNAL.GOV realm, since an FNAL.GOV
+ticket is refused.
 With
 .B yubikey
 the certificate in the token's PIV slot answers the identity provider's
@@ -355,11 +357,12 @@ fermi_sso_probe \-a yubikey \-c ~/.fermi_sso.cookies https://mu2e\-shifts.fnal.g
 .EE
 .RE
 .PP
-Log in with a Kerberos ticket, no password anywhere:
+Log in with a Kerberos ticket in the FERMI.WIN.FNAL.GOV realm (an
+FNAL.GOV ticket is refused), no password anywhere:
 .PP
 .RS
 .EX
-kinit
+kinit \fIuser\fP@FERMI.WIN.FNAL.GOV
 fermi_sso_probe \-a kerberos \-c ~/.fermi_sso.cookies
 .EE
 .RE
@@ -409,11 +412,11 @@ fermi_sso_probe \-c ~/Downloads/cookies.txt \-\-no\-save\-cookies \-n
 .PP
 Approve the CILogon device code that
 .B htgettoken \-\-headless
-printed in another terminal, with a Kerberos ticket:
+printed in another terminal, with the YubiKey:
 .PP
 .RS
 .EX
-fermi_sso_probe \-a kerberos \-\-user\-code N3X\-2R4\-GRR
+fermi_sso_probe \-a yubikey \-\-user\-code N3X\-2R4\-GRR
 .EE
 .RE
 .SH DIAGNOSTICS
@@ -437,8 +440,12 @@ Check
 .BR klist (1),
 then try
 .B kgetcred HTTP/pingprod.fnal.gov@FERMI.WIN.FNAL.GOV
-directly; "Clients credentials have been revoked" from that realm is an
-account\-state problem on the Windows side, not a ticket problem.
+directly.  Fermilab has two separate Kerberos realms: the identity provider
+is in FERMI.WIN.FNAL.GOV, and an FNAL.GOV ticket (the kind a plain
+.B kinit
+gives, and the kind Vault accepts) is refused with "Clients credentials
+have been revoked".  Without a FERMI.WIN.FNAL.GOV ticket use
+.BR "\-\-auth yubikey" .
 .TP
 .B the identity provider sent the application 'access_denied'
 The selected adapter refused. For

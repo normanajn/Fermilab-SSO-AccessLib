@@ -222,27 +222,34 @@ s = FermiSSOSession(auth_method="kerberos", cookie_file="~/.fermi_sso.cookies")
 If a connection offers no Kerberos adapter, the password adapter is selected
 instead, so `auth_method="kerberos"` plus `userpass` covers both cases.
 
+The ticket must be in the **FERMI.WIN.FNAL.GOV** realm, not FNAL.GOV; see
+below.
+
 ### When the challenge goes unanswered
 
 The probe reports "the identity provider's Kerberos (Negotiate) challenge was
-not answered". The cause is usually on the Kerberos side, not the HTTP side.
-The IdP's principal is `HTTP/pingprod.fnal.gov` in the **FERMI.WIN.FNAL.GOV**
-realm, reached from an FNAL.GOV ticket by cross-realm trust. Check it
-directly:
+not answered". The cause is almost always the realm of the ticket.
+
+Fermilab has two separate Kerberos realms. **FNAL.GOV** is the one a plain
+`kinit` gives you on Linux and macOS, and the one services such as the Vault
+token servers accept. The SSO identity provider is in **FERMI.WIN.FNAL.GOV**
+(principal `HTTP/pingprod.fnal.gov@FERMI.WIN.FNAL.GOV`), and an FNAL.GOV
+ticket does not get you in: the Windows-realm KDC answers "Clients
+credentials have been revoked". `auth_method="kerberos"` therefore only
+works with a FERMI.WIN.FNAL.GOV ticket. For everyone else the YubiKey (or a
+cookie jar) is the non-interactive route.
 
 ```bash
-klist                                              # a krbtgt/FNAL.GOV ticket?
-kgetcred HTTP/pingprod.fnal.gov@FERMI.WIN.FNAL.GOV # can you get the service ticket?
+klist                                              # which realm is the ticket in?
+kgetcred HTTP/pingprod.fnal.gov@FERMI.WIN.FNAL.GOV # the service ticket pingprod needs
 ```
 
-Seen 2026-09-02: `klist` showed a valid FNAL.GOV ticket and a cross-realm
-ticket for FERMI.WIN.FNAL.GOV, yet `kgetcred` answered **"Clients credentials
-have been revoked"**. That is the Windows-realm KDC saying the account it
-maps your principal to is disabled, locked, or expired; nothing in the
-library can change that outcome. Requesting the principal in FNAL.GOV
-instead gives `LOOKING_UP_SERVER`, because it does not exist there. The
-library and probe paths were verified against a scripted IdP that issues the
-same challenge; the live path is blocked until that account state is fixed.
+Seen 2026-09-02 and again 2026-10-19 with an FNAL.GOV ticket (which Vault
+accepted the same day): `kgetcred` answered "Clients credentials have been
+revoked". Requesting the principal in FNAL.GOV instead gives
+`LOOKING_UP_SERVER`, because it does not exist there. The library and probe
+paths are verified against a scripted IdP that issues the same challenge;
+they have not been run live with a FERMI.WIN.FNAL.GOV ticket.
 
 ## Logging in with a YubiKey
 
@@ -305,12 +312,14 @@ approval with the session's own authentication method.
 htgettoken -a htvaultprod.fnal.gov -i mu2e --headless
 #   ... https://cilogon.org/device/?user_code=N3X-2R4-GRR
 
-# terminal 2: approve it with your Kerberos ticket
-fermi-sso-probe -a kerberos --user-code N3X-2R4-GRR
+# terminal 2: approve it with your YubiKey (prompts for the PIN)
+fermi-sso-probe -a yubikey --user-code N3X-2R4-GRR
 ```
 
 ```python
-s = FermiSSOSession(auth_method="kerberos")
+from fermi_sso_yubikey import YubiKeyCertHop
+
+s = FermiSSOSession(auth_method="yubikey", cert_hop=YubiKeyCertHop())
 result = s.approve_cilogon_device("https://cilogon.org/device/?user_code=N3X-2R4-GRR")
 print(result.ok, result.reasons, result.response.url)
 ```
@@ -352,7 +361,9 @@ Things to know:
   "User code not found" are reported verbatim. The client's token poll is
   the final confirmation.
 - **MFA**: as for any site, an MFA-enrolled account cannot use the password
-  adapter. Kerberos and the YubiKey are the non-interactive routes.
+  adapter. The YubiKey is the usual route. Kerberos works only with a
+  FERMI.WIN.FNAL.GOV ticket: the FNAL.GOV ticket that logs you in to Vault
+  is refused by the SSO identity provider.
 
 ## Reusing cookies instead of a password
 

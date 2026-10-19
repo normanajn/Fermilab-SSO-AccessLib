@@ -291,9 +291,10 @@ def classify(
     ):
         reasons.append(
             "the identity provider's Kerberos (Negotiate) challenge was not "
-            "answered: no ticket, or the KDC refused a service ticket for "
-            f"HTTP/{urlsplit(resp.url).hostname}; check klist, kinit, and "
-            "the realm of that principal"
+            "answered: it needs a FERMI.WIN.FNAL.GOV ticket for "
+            f"HTTP/{urlsplit(resp.url).hostname}, and an FNAL.GOV ticket "
+            "(the kind Vault accepts) is refused; check klist, or use "
+            "--auth yubikey"
         )
     if SECOND_FACTOR_RE.search(resp.text):
         reasons.append(

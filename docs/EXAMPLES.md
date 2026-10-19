@@ -109,9 +109,11 @@ if r.status_code == 401:
     raise SystemExit("Kerberos challenge not answered; check klist")
 ```
 
-Note: on this site the IdP's principal lives in FERMI.WIN.FNAL.GOV. If the
-probe reports the challenge unanswered, run
-`kgetcred HTTP/pingprod.fnal.gov@FERMI.WIN.FNAL.GOV` to see the KDC's answer.
+Note: the ticket must be in **FERMI.WIN.FNAL.GOV**. Fermilab's two Kerberos
+realms are separate: the FNAL.GOV ticket a plain `kinit` gives you, which
+Vault accepts, is refused here ("Clients credentials have been revoked" from
+`kgetcred HTTP/pingprod.fnal.gov@FERMI.WIN.FNAL.GOV`). Without a FERMI.WIN
+ticket, use §7.
 
 ## 7. YubiKey (PIV certificate), from a terminal
 
@@ -181,14 +183,16 @@ machine instead of a phone. Run end to end on 2026-10-19 with the YubiKey
 
 ```bash
 htgettoken -a htvaultprod.fnal.gov -i mu2e --headless &   # prints the code
-fermi-sso-probe -a kerberos --user-code N3X-2R4-GRR
+fermi-sso-probe -a yubikey --user-code N3X-2R4-GRR
 # RESULT: login SUCCEEDED
 #   landed on https://cilogon.org/secure/getuser/
 wait                                                      # htgettoken's poll completes
 ```
 
 ```python
-s = FermiSSOSession(auth_method="kerberos")
+from fermi_sso_yubikey import YubiKeyCertHop
+
+s = FermiSSOSession(auth_method="yubikey", cert_hop=YubiKeyCertHop())
 result = s.approve_cilogon_device("https://cilogon.org/device/?user_code=N3X-2R4-GRR")
 if not result.ok:
     raise SystemExit("; ".join(result.reasons))

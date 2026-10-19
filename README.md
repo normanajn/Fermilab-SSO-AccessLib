@@ -54,9 +54,10 @@ fermi-sso-probe -a kerberos -c ~/.fermi_sso.cookies
 s = FermiSSOSession(auth_method="kerberos")
 ```
 
-The IdP's Kerberos principal lives in the FERMI.WIN.FNAL.GOV realm; if the
-challenge goes unanswered, `kgetcred HTTP/pingprod.fnal.gov@FERMI.WIN.FNAL.GOV`
-shows why. See the HOWTO.
+The ticket must be in the **FERMI.WIN.FNAL.GOV** realm. Fermilab has two
+separate Kerberos realms: the FNAL.GOV ticket a plain `kinit` gives you
+(the one Vault accepts) is refused by the SSO identity provider. Without a
+FERMI.WIN.FNAL.GOV ticket, use the YubiKey or a cookie jar. See the HOWTO.
 
 ### YubiKey
 
@@ -77,12 +78,14 @@ and user code for a person to approve. The session can approve it instead,
 with any of the methods above:
 
 ```
-fermi-sso-probe -a kerberos --user-code N3X-2R4-GRR
-fermi-sso-probe -a kerberos "https://cilogon.org/device/?user_code=N3X-2R4-GRR"
+fermi-sso-probe -a yubikey --user-code N3X-2R4-GRR
+fermi-sso-probe -a yubikey "https://cilogon.org/device/?user_code=N3X-2R4-GRR"
 ```
 
 ```python
-s = FermiSSOSession(auth_method="kerberos")
+from fermi_sso_yubikey import YubiKeyCertHop
+
+s = FermiSSOSession(auth_method="yubikey", cert_hop=YubiKeyCertHop())
 result = s.approve_cilogon_device("N3X-2R4-GRR")   # or the full URL
 if not result.ok:
     raise SystemExit("; ".join(result.reasons))
