@@ -14,16 +14,18 @@ which libcurl can then read (`CURLOPT_COOKIEFILE`, Netscape format).
 
 ## Dependency
 
-The GitHub repo `normanajn/Fermi-SSO-AccessLib` is **private**, so
-consumers need GitHub SSH or token access. Pin a tag, never `main`. Tags
-have no `v` prefix (for example `0.2.0`). List them with
-`git ls-remote --tags git@github.com:normanajn/Fermi-SSO-AccessLib.git`.
+The GitHub repo `normanajn/Fermilab-SSO-AccessLib` (formerly
+`Fermi-SSO-AccessLib`) is **private**, so consumers need GitHub SSH or token
+access. Pin a tag, never `main`. Tags have no `v` prefix (for example
+`0.3.0`). List them with
+`git ls-remote --tags git@github.com:normanajn/Fermilab-SSO-AccessLib.git`.
+`0.3.0` is the first release with `approve_cilogon_device()`.
 
 ```
 # requirements.txt
-requests-fermi_sso @ git+ssh://git@github.com/normanajn/Fermi-SSO-AccessLib.git@0.2.0
-# with Kerberos support
-requests-fermi_sso[kerberos] @ git+ssh://git@github.com/normanajn/Fermi-SSO-AccessLib.git@0.2.0
+requests-fermi_sso @ git+ssh://git@github.com/normanajn/Fermilab-SSO-AccessLib.git@0.3.0
+# with Kerberos support (needs a FERMI.WIN.FNAL.GOV ticket, not FNAL.GOV)
+requests-fermi_sso[kerberos] @ git+ssh://git@github.com/normanajn/Fermilab-SSO-AccessLib.git@0.3.0
 ```
 
 Python >= 3.9. Runtime dependency is `requests` only. The `kerberos` extra
