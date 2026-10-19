@@ -1,6 +1,7 @@
 import requests
 from requests.cookies import create_cookie
 
+import html
 import json
 import os
 import re
@@ -8,10 +9,10 @@ import sys
 import time
 import logging
 from html.parser import HTMLParser
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, NamedTuple, Optional, Tuple
 from urllib.parse import urlencode, urljoin, urlsplit
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,29 @@ MAX_SCAN_BYTES = 2 * 1024 * 1024
 #: Most flows post back once. A few chain a second time through an
 #: intermediate assertion consumer; anything beyond that is a loop.
 MAX_POSTBACK_HOPS = 4
+
+#: Hosts whose device-flow and identity-provider-selection pages are answered.
+CILOGON_HOSTS = ("cilogon.org", "test.cilogon.org")
+
+#: Fermilab's entityID in CILogon's IdP list. CILogon sends it to
+#: idpext.fnal.gov, a Shibboleth IdP that proxies to pingprod's SAML
+#: connection, so the choose and login pages that follow are the usual ones.
+FERMILAB_CILOGON_IDP = "https://idp.fnal.gov/idp/shibboleth"
+
+#: CILogon's device-flow page; a bare user code is appended as ?user_code=.
+CILOGON_DEVICE_URL = "https://cilogon.org/device/"
+
+#: The Shibboleth IdP reads browser local storage before authenticating and
+#: writes it afterwards, each through an auto-submitting form. Two per login
+#: is normal; more than this is a loop.
+MAX_SHIB_STORAGE_HOPS = 4
+
+#: CILogon reports problems (unknown or expired user code, IdP errors) in a
+#: Bootstrap alert-danger box.
+_CILOGON_ALERT_RE = re.compile(
+    r'<div[^>]*class="alert alert-danger[^"]*"[^>]*>(.*?)</div>', re.I | re.S
+)
+_TAG_RE = re.compile(r"<[^>]+>")
 
 _NETSCAPE_HEADER = "# Netscape HTTP Cookie File"
 _LWP_HEADER = "#LWP-Cookies-2.0"
@@ -110,6 +134,11 @@ class FermiSSOSession(requests.Session):
         cookie_save    when true (the default if cookie_file is given), the
                        jar is rewritten to cookie_file each time this session
                        completes a login sequence
+        cilogon_idp    entityID to select on CILogon's identity-provider
+                       page (default FERMILAB_CILOGON_IDP)
+        cilogon_user_code
+                       user code to enter on CILogon's device page when it
+                       asks for one; see approve_cilogon_device()
         """
 
         if "userpass" in kwargs:
@@ -182,6 +211,14 @@ class FermiSSOSession(requests.Session):
         # carrying SAMLRequest. Count of those submitted here.
         self.authn_request_count = 0
 
+        # CILogon (OIDC device flow, and CILogon-fronted OIDC clients) puts its
+        # own pages in front of the institution's IdP: a user-code form and an
+        # identity-provider selection form that doubles as the consent page.
+        self.cilogon_idp = kwargs.pop("cilogon_idp", FERMILAB_CILOGON_IDP)
+        self.cilogon_user_code = kwargs.pop("cilogon_user_code", None)
+        self.cilogon_count = 0
+        self.shib_storage_count = 0
+
         self.cookie_file = kwargs.pop("cookie_file", None)
         if self.cookie_file:
             self.cookie_file = os.path.expanduser(self.cookie_file)
@@ -253,6 +290,31 @@ class FermiSSOSession(requests.Session):
                 self, url, data=formdata, headers={"Referer": res.url}
             )
             self.allauth_count += 1
+
+        if self.cilogon_user_code and self.is_cilogon_user_code_page(res):
+            self.logging_in_already = True
+            url, formdata = self.extract_cilogon_user_code_form(res)
+            logger.debug(f"got CILogon user-code page; posting to {url}")
+            res = requests.Session.post(
+                self, url, data=formdata, headers={"Referer": res.url}
+            )
+            self.cilogon_count += 1
+
+        if self.is_cilogon_wayf_page(res):
+            # Selecting the IdP here is also the consent to release the listed
+            # attributes to the client named on the page
+            self.logging_in_already = True
+            url, formdata = self.extract_cilogon_wayf_form(res)
+            logger.debug(
+                f"got CILogon identity-provider page; selecting "
+                f"{formdata['providerId']} at {url}"
+            )
+            res = requests.Session.post(
+                self, url, data=formdata, headers={"Referer": res.url}
+            )
+            self.cilogon_count += 1
+
+        res = self._answer_shib_storage(res)
 
         if self.is_saml_request_page(res):
             # SP -> IdP AuthnRequest by HTTP-POST binding: submit it and carry
@@ -333,12 +395,15 @@ class FermiSSOSession(requests.Session):
         # a chained postback -- where the assertion consumer answers with
         # another one -- this frame's job, hence the loop rather than a
         # single if.
+        #
+        # A Shibboleth IdP in the chain (idpext.fnal.gov behind CILogon) puts
+        # a client-storage form between receiving pingprod's postback and
+        # sending its own, so those are answered on the way through.
         hops = 0
-        while (
-            hops < MAX_POSTBACK_HOPS
-            and self._is_scannable(res)
-            and self.postback_form_re.search(res.text)
-        ):
+        while hops < MAX_POSTBACK_HOPS and self._is_scannable(res):
+            res = self._answer_shib_storage(res)
+            if not self.is_postback_page(res):
+                break
             logger.debug("saw Postback form...")
             logger.debug(f"cookies: {repr(self.cookies)}")
             logger.debug(res.text)
@@ -351,7 +416,7 @@ class FermiSSOSession(requests.Session):
         if (
             hops >= MAX_POSTBACK_HOPS
             and self._is_scannable(res)
-            and self.postback_form_re.search(res.text)
+            and self.is_postback_page(res)
         ):
             # still another one pending, so we stopped on the bound rather
             # than because the chain ended
@@ -420,11 +485,43 @@ class FermiSSOSession(requests.Session):
             (c.domain, c.path, c.name, c.value, c.expires) for c in self.cookies
         )
 
+    def is_postback_page(self, resp) -> bool:
+        """
+        True when resp is an IdP's auto-submitting SAMLResponse form.
+
+        pingprod's form matches postback_form_re. The Shibboleth IdP writes
+        action before method and may omit RelayState, which that pattern does
+        not allow, so a parsed post form with a SAMLResponse field counts too.
+        """
+        if not self._is_scannable(resp):
+            return False
+        return bool(
+            self.postback_form_re.search(resp.text)
+            or self._saml_response_form(resp)
+        )
+
     def extract_post_back_data(self, resp):
         """utiltity to regex match the data for the postback form"""
 
         m = self.postback_form_re.search(resp.text)
-        return m.group(1), {"RelayState": m.group(2), "SAMLResponse": m.group(3)}
+        if m:
+            return m.group(1), {"RelayState": m.group(2), "SAMLResponse": m.group(3)}
+        form = self._saml_response_form(resp)
+        if form is None:
+            raise ValueError("no SAML postback form in response")
+        return form
+
+    @staticmethod
+    def _saml_response_form(resp):
+        """(absolute URL, fields) of a post form carrying SAMLResponse, or None."""
+        for attrs, fields in _find_forms(resp.text):
+            if (attrs.get("method") or "").lower() != "post":
+                continue
+            if "SAMLResponse" in fields:
+                action = attrs.get("action") or ""
+                url = urljoin(resp.url, action) if action else resp.url
+                return url, fields
+        return None
 
     def extract_login_url(self, resp):
         """utility to regex match and expand the login form url"""
@@ -609,6 +706,170 @@ class FermiSSOSession(requests.Session):
         return None
 
     # ------------------------------------------------------------------
+    # CILogon (device flow and identity-provider selection)
+    # ------------------------------------------------------------------
+
+    def approve_cilogon_device(self, verification: str) -> "CILogonResult":
+        """
+        Approve an OIDC device-flow request at CILogon.
+
+        verification is the verification_uri_complete a device-flow client
+        prints (https://cilogon.org/device/?user_code=...), or the bare user
+        code. Fetching it walks CILogon's user-code and identity-provider
+        pages, the Shibboleth and PingFederate login, and the postbacks back
+        to CILogon, with whatever auth_method this session was built for.
+
+        The result's ok means CILogon accepted the login and showed no error.
+        The client polling the token endpoint is the final word.
+        """
+        if "://" in verification:
+            url = verification
+        else:
+            code = verification.strip()
+            if not self.cilogon_user_code:
+                self.cilogon_user_code = code
+            url = CILOGON_DEVICE_URL + "?" + urlencode({"user_code": code})
+        res = self.get(url)
+        reasons = self.cilogon_problems(res)
+        return CILogonResult(not reasons, reasons, res)
+
+    def cilogon_problems(self, resp) -> List[str]:
+        """
+        Reasons resp is not a completed CILogon approval; empty when it is.
+
+        Success is a CILogon page with no error alert and none of CILogon's
+        own forms still waiting. Anything left on an IdP is reported by the
+        caller (fermi_sso_probe.classify) or shows here as "not on CILogon".
+        """
+        reasons: List[str] = []
+        if not _is_cilogon(resp.url):
+            host = urlsplit(resp.url).hostname or resp.url
+            reasons.append(f"the login did not return to CILogon (stopped on {host})")
+            return reasons
+        error = cilogon_error(resp.text)
+        if error:
+            reasons.append(f"CILogon reported: {error}")
+        if self.is_cilogon_user_code_page(resp):
+            reasons.append(
+                "still on CILogon's user-code page; pass the user code "
+                "(cilogon_user_code, or the verification_uri_complete URL)"
+            )
+        if self.is_cilogon_wayf_page(resp):
+            reasons.append("still on CILogon's identity-provider page")
+        return reasons
+
+    def is_cilogon_user_code_page(self, resp) -> bool:
+        """True when resp is CILogon's "Enter User Code" device form."""
+        return self._cilogon_form(resp, "user_code") is not None
+
+    def extract_cilogon_user_code_form(self, resp) -> Tuple[str, Dict[str, str]]:
+        """(absolute post URL, fields) for the user-code form, code filled in."""
+        form = self._cilogon_form(resp, "user_code")
+        if form is None:
+            raise ValueError("no CILogon user-code form in response")
+        if not self.cilogon_user_code:
+            raise ValueError("CILogon asks for a user code and none was given")
+        url, fields = form
+        fields["user_code"] = self.cilogon_user_code
+        # the PHP side dispatches on the submit button's value
+        fields["submit"] = "Enter User Code"
+        return url, fields
+
+    def is_cilogon_wayf_page(self, resp) -> bool:
+        """
+        True when resp is CILogon's identity-provider selection form.
+
+        On a device or OIDC authorization request the same form carries the
+        consent text, so submitting it with "Log On" approves the request.
+        """
+        form = self._cilogon_form(resp, "providerId")
+        return form is not None and form[1].get("previouspage") == "WAYF"
+
+    def extract_cilogon_wayf_form(self, resp) -> Tuple[str, Dict[str, str]]:
+        """(absolute post URL, fields) selecting self.cilogon_idp and Log On."""
+        form = self._cilogon_form(resp, "providerId")
+        if form is None:
+            raise ValueError("no CILogon identity-provider form in response")
+        url, fields = form
+        options = re.findall(
+            r'<option[^>]*value="([^"]*)"', resp.text[: MAX_SCAN_BYTES]
+        )
+        if self.cilogon_idp not in options:
+            # the generic page lists only the social IdPs and loads the rest
+            # with JavaScript; CILogon accepts any entityID it federates with
+            logger.debug(f"{self.cilogon_idp} not among the page's options; posting it anyway")
+        fields["providerId"] = self.cilogon_idp
+        # an unchecked checkbox is not submitted by a browser
+        fields.pop("keepidp", None)
+        # the two buttons are both name="submit": "Log On" and "Cancel"
+        fields["submit"] = "Log On"
+        return url, fields
+
+    @staticmethod
+    def _cilogon_form(resp, field):
+        """(absolute URL, fields) of a CILogon post form with field and CSRF."""
+        if not _is_cilogon(resp.url):
+            return None
+        for attrs, fields in _find_forms(resp.text):
+            if (attrs.get("method") or "").lower() != "post":
+                continue
+            if field in fields and "CSRF" in fields:
+                action = attrs.get("action") or ""
+                url = urljoin(resp.url, action) if action else resp.url
+                if not _is_cilogon(url):
+                    continue
+                return url, dict(fields)
+        return None
+
+    # ------------------------------------------------------------------
+    # Shibboleth IdP client-storage pages
+    # ------------------------------------------------------------------
+
+    def is_shib_storage_page(self, resp) -> bool:
+        """
+        True when resp is a Shibboleth IdP's local-storage read or write form:
+        a post form with _eventId_proceed and shib_idp_ls_* fields. A browser
+        submits it from JavaScript; submitted as served, it tells the IdP that
+        local storage is unavailable, and the IdP falls back to its cookie.
+        """
+        return self._shib_storage_form(resp) is not None
+
+    def _answer_shib_storage(self, res):
+        """Submit consecutive client-storage forms; return the first other page."""
+        for _ in range(MAX_SHIB_STORAGE_HOPS):
+            if not self._is_scannable(res):
+                return res
+            form = self._shib_storage_form(res)
+            if form is None:
+                return res
+            self.logging_in_already = True
+            url, formdata = form
+            logger.debug(f"got Shibboleth client-storage form; posting to {url}")
+            res = requests.Session.post(
+                self, url, data=formdata, headers={"Referer": res.url}
+            )
+            self.shib_storage_count += 1
+        if self._is_scannable(res) and self._shib_storage_form(res):
+            logger.warning(
+                f"stopped after {MAX_SHIB_STORAGE_HOPS} Shibboleth "
+                "client-storage forms with another still pending"
+            )
+        return res
+
+    @staticmethod
+    def _shib_storage_form(resp):
+        for attrs, fields in _find_forms(resp.text):
+            if (attrs.get("method") or "").lower() != "post":
+                continue
+            if "_eventId_proceed" in fields and any(
+                name.startswith("shib_idp_ls_") for name in fields
+            ):
+                action = attrs.get("action") or ""
+                url = urljoin(resp.url, action) if action else resp.url
+                return url, fields
+        return None
+
+    # ------------------------------------------------------------------
     # cookie persistence
     # ------------------------------------------------------------------
 
@@ -699,6 +960,40 @@ class FermiSSOSession(requests.Session):
             raise
         logger.debug(f"saved {len(cookies)} cookies to {path} ({fmt})")
         return len(cookies)
+
+
+# ----------------------------------------------------------------------
+# CILogon helpers
+# ----------------------------------------------------------------------
+
+
+class CILogonResult(NamedTuple):
+    """What approve_cilogon_device() returns."""
+
+    ok: bool
+    reasons: List[str]
+    response: requests.Response
+
+
+def _is_cilogon(url: str) -> bool:
+    host = (urlsplit(url).hostname or "").lower()
+    return host in CILOGON_HOSTS
+
+
+def cilogon_error(text: str) -> Optional[str]:
+    """
+    The text of CILogon's error alert in a page, or None.
+
+    The "JavaScript is not enabled" notice uses the same alert style on every
+    page fetched without a browser and is not an error.
+    """
+    for match in _CILOGON_ALERT_RE.finditer(text):
+        # the dismiss button's &times; is markup, not message
+        message = html.unescape(_TAG_RE.sub(" ", match.group(1)))
+        message = " ".join(message.replace("\u00d7", " ").split())
+        if message and "JavaScript is not enabled" not in message:
+            return message
+    return None
 
 
 # ----------------------------------------------------------------------

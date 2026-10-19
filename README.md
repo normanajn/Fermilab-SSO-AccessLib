@@ -70,6 +70,31 @@ fermi-sso-yubikey                                # readiness check
 fermi-sso-probe -a yubikey -c ~/.fermi_sso.cookies URL   # prompts for the PIN
 ```
 
+### CILogon device flow (htgettoken, Vault)
+
+OIDC device-flow clients such as `htgettoken --headless` print a CILogon URL
+and user code for a person to approve. The session can approve it instead,
+with any of the methods above:
+
+```
+fermi-sso-probe -a kerberos --user-code N3X-2R4-GRR
+fermi-sso-probe -a kerberos "https://cilogon.org/device/?user_code=N3X-2R4-GRR"
+```
+
+```python
+s = FermiSSOSession(auth_method="kerberos")
+result = s.approve_cilogon_device("N3X-2R4-GRR")   # or the full URL
+if not result.ok:
+    raise SystemExit("; ".join(result.reasons))
+```
+
+The walk is CILogon's identity-provider page (which is also the consent to
+release attributes to the client named on it), Fermilab's Shibboleth proxy
+`idpext.fnal.gov`, the usual pingprod choose and login pages, and the SAML
+postbacks back to CILogon. `cilogon_idp=` selects an identity provider other
+than Fermilab. Approving a request is a sign-on in your name: only pass codes
+from clients you started yourself.
+
 ### Reusing cookies across runs
 
 Pass `cookie_file` and the jar is loaded before the first request and saved
@@ -130,7 +155,7 @@ fermi-sso-cookies -D pingprod.fnal.gov -l ~/.fermi_sso.cookies   # is the IdP se
 
 ### Documentation
 
-- [docs/EXAMPLES.md](docs/EXAMPLES.md) — copy-paste recipes for DocDB, the shift scheduler, Mu2eTalks, ServiceNow, Kerberos, and the YubiKey
+- [docs/EXAMPLES.md](docs/EXAMPLES.md) — copy-paste recipes for DocDB, the shift scheduler, Mu2eTalks, ServiceNow, Kerberos, the YubiKey, and CILogon device codes
 - [docs/HOWTO.md](docs/HOWTO.md) — install, credentials, troubleshooting
 - [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) — external dependencies per authentication method, with install commands per platform
 - `examples/` — small hand-run scripts; start with `check_cdcvs_login.py`
@@ -158,6 +183,11 @@ them — an account enrolled in MFA cannot complete the password flow itself, so
 that is what the "special account" above is for, or else a browser login whose
 cookies are exported and passed in via `cookie_file`. PingFederate's RSA
 SecurID form is recognized and reported, not answered.
+
+On CILogon only the user-code and identity-provider forms are answered, and
+a Shibboleth attribute-release consent page, if one is ever shown, is not.
+A CILogon approval is reported as successful when CILogon shows no error;
+the device-flow client's token poll is the final word.
 
 Saved cookies last only as long as the site's session; expiry shows up as a
 login page, not an error. Page recognition is regex-based and will break if

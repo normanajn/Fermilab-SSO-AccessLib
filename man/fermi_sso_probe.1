@@ -1,4 +1,4 @@
-.TH FERMI_SSO_PROBE 1 "2026-09-02" "requests-fermi-sso 0.2.0" "User Commands"
+.TH FERMI_SSO_PROBE 1 "2026-10-19" "requests-fermi-sso 0.3.0" "User Commands"
 .SH NAME
 fermi_sso_probe \- verify a Fermilab single sign\-on login
 .SH SYNOPSIS
@@ -158,6 +158,31 @@ without reaching the service provider. Defaults to
 Set it to the empty string to disable that check when probing a site behind
 a different IdP.
 .TP
+.BI \-\-user\-code " CODE"
+Approve the CILogon OIDC device\-flow user code
+.I CODE
+(as printed by
+.B htgettoken \-\-headless
+or any other device\-flow client). With no
+.IR URL ,
+the probe fetches
+.BI https://cilogon.org/device/?user_code= CODE\fR,
+selects the identity provider on CILogon's page (which is also the consent
+to release attributes to the client named there), logs in at the identity
+provider with the chosen
+.BR \-\-auth ,
+and follows the postbacks back to CILogon. With an explicit
+.IR URL ,
+the code is entered if CILogon asks for one. Approving a code is a sign\-on
+in your name; only pass codes from clients you started.
+.TP
+.BI \-\-cilogon\-idp " ENTITYID"
+Identity provider to select on CILogon's page. Default
+.BR https://idp.fnal.gov/idp/shibboleth ,
+Fermilab, which CILogon sends to the Shibboleth proxy
+.B idpext.fnal.gov
+and on to pingprod's SAML connection.
+.TP
 .BI \-x " TEXT" "\fR, \fP" \-\-expect " TEXT"
 Require
 .I TEXT
@@ -231,6 +256,14 @@ Default URL to fetch.
 .TP
 .B FERMI_SSO_IDP_HOST
 Default identity provider hostname.
+.TP
+.B FERMI_SSO_USER_CODE
+CILogon device\-flow user code, as for
+.BR \-\-user\-code .
+.TP
+.B FERMI_SSO_CILOGON_IDP
+Identity provider entityID to select on CILogon, as for
+.BR \-\-cilogon\-idp .
 .TP
 .B FERMI_SSO_ENV_FILE
 Path to the env file, overriding the default search.
@@ -373,6 +406,16 @@ modifying the export:
 fermi_sso_probe \-c ~/Downloads/cookies.txt \-\-no\-save\-cookies \-n
 .EE
 .RE
+.PP
+Approve the CILogon device code that
+.B htgettoken \-\-headless
+printed in another terminal, with a Kerberos ticket:
+.PP
+.RS
+.EX
+fermi_sso_probe \-a kerberos \-\-user\-code N3X\-2R4\-GRR
+.EE
+.RE
 .SH DIAGNOSTICS
 .TP
 .B still on the login form -- wrong password, or the account requires MFA
@@ -441,6 +484,19 @@ service provider.
 .B stranded on pingprod.fnal.gov
 The flow ended on the IdP at a page the library does not recognize, such as
 an error or consent interstitial.
+.TP
+.B the login did not return to CILogon (stopped on HOST)
+A CILogon approval stopped at the identity provider; the other reasons
+printed with it say why.
+.TP
+.B CILogon reported: MESSAGE
+CILogon's own error, for example
+.B Error: User code not found.
+for a wrong, used, or expired code.
+.TP
+.B stopped on a Shibboleth client\-storage form at HOST
+The Shibboleth proxy served more local\-storage forms in a row than the
+library answers.
 .TP
 .B password contains ':'
 .B FermiSSOSession

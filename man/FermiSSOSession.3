@@ -1,4 +1,4 @@
-.TH FERMISSOSESSION 3 "2026-09-02" "requests-fermi-sso 0.2.0" "Python Library"
+.TH FERMISSOSESSION 3 "2026-10-19" "requests-fermi-sso 0.3.0" "Python Library"
 .SH NAME
 FermiSSOSession \- requests.Session subclass that logs into Fermilab SSO
 .SH SYNOPSIS
@@ -13,6 +13,7 @@ FermiSSOSession \- requests.Session subclass that logs into Fermilab SSO
 .B "s = FermiSSOSession(auth_method=\(dqyubikey\(dq, cert_hop=YubiKeyCertHop())"
 .BI "n = s.load_cookies(" PATH ", fmt=None, missing_ok=False)"
 .BI "n = s.save_cookies(" PATH ", fmt=None)"
+.BI "result = s.approve_cilogon_device(" "URL or CODE" )
 .EE
 .SH DESCRIPTION
 .B FermiSSOSession
@@ -104,7 +105,37 @@ An auto\-submitting form carrying
 and
 .BR SAMLResponse .
 The session posts it to the service provider, which sets the application
-session cookie.
+session cookie. pingprod's form is matched by
+.BR postback_form_re ;
+a parsed post form with a
+.B SAMLResponse
+field in any attribute order also counts, which is how the Shibboleth IdP
+writes it. Chained postbacks are followed, up to four.
+.TP
+.B CILogon user\-code and identity\-provider forms
+On
+.B cilogon.org
+only: the device page's "Enter User Code" form, filled from
+.B cilogon_user_code
+(left alone without one), and the identity\-provider selection form, posted with
+.B providerId
+set to
+.B cilogon_idp
+and
+.BR "submit=Log On" .
+On a device or OIDC authorization request the selection form carries the
+consent text for the client, so submitting it approves the request.
+.TP
+.B Shibboleth client\-storage forms
+The auto\-submitting local\-storage read and write forms of a Shibboleth IdP
+(a post form with
+.B _eventId_proceed
+and
+.B shib_idp_ls_*
+fields), served by
+.B idpext.fnal.gov
+before and after the pingprod login. Posted as served, telling the IdP that
+local storage is unavailable.
 .PP
 One page is recognized and deliberately
 .I not
@@ -267,6 +298,16 @@ the session in through a bare redirect chain. Defaults to true whenever
 .B cookie_file
 is given. A request that leaves the jar unchanged never touches the file, so
 a browser export is not rewritten unless the site issued new cookies.
+.TP
+.B cilogon_idp
+EntityID to select on CILogon's identity\-provider page. Default
+.BR FERMILAB_CILOGON_IDP ,
+.BR https://idp.fnal.gov/idp/shibboleth .
+.TP
+.B cilogon_user_code
+User code to enter when CILogon's device page asks for one.
+.BR approve_cilogon_device ()
+sets it from a bare code.
 .RE
 .PP
 Without
@@ -324,6 +365,12 @@ Number of allauth confirmation forms this session has submitted.
 .B authn_request_count
 Number of SAML AuthnRequest forms this session has submitted.
 .TP
+.B cilogon_count
+Number of CILogon user\-code and identity\-provider forms submitted.
+.TP
+.B shib_storage_count
+Number of Shibboleth client\-storage forms submitted.
+.TP
 .B mtls_location_re
 .TQ
 .B cert_hop_count
@@ -370,10 +417,50 @@ Adapter id to select on the choose page for the session's
 .BI extract_chose_url( response )
 Absolute URL that selects that adapter, query string included.
 .TP
+.BI is_postback_page( response )
+True when the response is an auto\-submitting SAMLResponse form, pingprod's or
+the Shibboleth IdP's.
+.TP
 .BI extract_post_back_data( response )
 Returns
 .RI ( url ", " formdata )
 for the SAML postback form.
+.TP
+.BI approve_cilogon_device( verification )
+Approve an OIDC device\-flow request at CILogon.
+.I verification
+is the client's
+.B verification_uri_complete
+or a bare user code, which is sent as
+.BI https://cilogon.org/device/?user_code= CODE\fR.
+Returns a
+.B CILogonResult
+named tuple
+.RI ( ok ", " reasons ", " response ),
+where
+.I ok
+is true when
+.BR cilogon_problems ()
+finds nothing. The client's token poll is the final confirmation.
+.TP
+.BI cilogon_problems( response )
+List of reasons the response is not a completed CILogon approval: not on
+CILogon, CILogon's error alert (for example "User code not found."), or a
+CILogon form still pending. Empty on success.
+.TP
+.BI is_cilogon_user_code_page( response )
+.TQ
+.BI is_cilogon_wayf_page( response )
+.TQ
+.BI is_shib_storage_page( response )
+True when the response is that form, as defined under Flow.
+.TP
+.BI extract_cilogon_user_code_form( response )
+.TQ
+.BI extract_cilogon_wayf_form( response )
+Returns
+.RI ( url ", " formdata )
+for that CILogon form, filled in as the session would post it.
 .TP
 .BI is_allauth_sso_page( response )
 True when the response is an allauth confirmation page as defined under

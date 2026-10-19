@@ -509,3 +509,215 @@ class FakeCertHop:
     def __call__(self, url, prepared):
         self.calls.append((url, dict(prepared.headers)))
         return self.response
+
+
+# --------------------------------------------------------------------------
+# CILogon device flow -> idpext.fnal.gov (Shibboleth) -> pingprod (SAML)
+#
+# Trimmed from what cilogon.org and idpext.fnal.gov served on 2026-10-19 for
+# an htvaultprod device-flow request. Tag shapes are kept: CILogon's submit
+# controls are <button name="submit">, and the Shibboleth forms put action
+# before method.
+# --------------------------------------------------------------------------
+
+CILOGON = "https://cilogon.org"
+CILOGON_CODE = "2JL-3C2-LGP"
+CILOGON_VERIFY = CILOGON + "/device/?user_code=" + CILOGON_CODE
+CILOGON_CSRF = "2bd285466b60acbcecf96b67352df6a8"
+CILOGON_COOKIES = [
+    "PHPSESSID=php-1; path=/; domain=.cilogon.org; secure; HttpOnly",
+    f"CSRF={CILOGON_CSRF}; path=/; domain=.cilogon.org; secure",
+]
+FNAL_ENTITY = "https://idp.fnal.gov/idp/shibboleth"
+IDPEXT = "https://idpext.fnal.gov"
+IDPEXT_SSO = IDPEXT + "/idp/profile/SAML2/Redirect/SSO"
+IDPEXT_ACS = IDPEXT + "/idp/profile/Authn/SAML2/POST/SSO"
+PING9031 = "https://pingprod.fnal.gov:9031"
+CIL_RESUME = "/idp/XHDzaXTSra/resumeSAML20/idp/SSO.ping"
+
+_CILOGON_JS_NOTICE = """<div class="alert alert-danger alert-dismissible" role="alert">
+          <span>Notice: JavaScript is not enabled. The CILogon Service requires JavaScript for functionality. <a target="_blank" href="https://enable-javascript.com/" class="alert-link">Please Enable JavaScript</a>.</span>
+        </div>"""
+
+CILOGON_USER_CODE_PAGE = """<!DOCTYPE html><html><head><title>CILogon</title></head><body>
+{notice}
+{alert}
+          <form action="/device/" method="post"
+          autocomplete="off" id="form01"
+          class="needs-validation" novalidate="novalidate" title="Enter User Code"><input type="hidden" name="CSRF" value="{csrf}" />
+              <input type="text" name="user_code" id="user-code"
+              required="required" autocomplete="off" maxlength="40"
+              class="form-control upper" aria-describedby="user-code-help"
+              title="User code is alphanumeric"/>
+              <button type="submit" name="submit"
+              class="btn btn-primary submit"
+              value="Enter User Code"
+              title="Enter User Code">Enter User Code</button>
+        </form>
+</body></html>
+"""
+
+CILOGON_CODE_NOT_FOUND = """<div class="alert alert-danger alert-dismissable fade show" role="alert">Error: User code not found.
+              <button type="button" class="close" data-dismiss="alert"
+              aria-label="Close"><span aria-hidden="true">&times;</span></button>
+            </div>"""
+
+CILOGON_WAYF_PAGE = """<!DOCTYPE html><html><head><title>CILogon</title></head><body>
+{notice}
+      <div class="card col-sm-10 offset-sm-1" id="id-div-oidcconsent">
+              <div class="card-text my-2" id="id-consent-attribute-release">
+                <a target="_blank" href="https://htvaultprod.fnal.gov:8200">htvaultprod-mu2e-vault</a> requests access to the following information. If you do not approve this request, do not proceed.
+              </div>
+              <ul><li>User Code: <tt>{code}</tt></li><li>Your CILogon user identifier</li></ul>
+      </div>
+          <form action="/device/" method="post">
+            <select name="providerId" id="providerId"
+                aria-label="Select an Identity Provider"
+                class="selectpicker mw-100">
+                <option data-tokens="{entity}" value="{entity}" selected="selected">Fermi National Accelerator Laboratory</option>
+            </select>
+                <input class="form-check-input" type="checkbox"
+                id="keepidp" name="keepidp"  />
+            <input type="hidden" name="CSRF" value="{csrf}" /><input type="hidden" name="skinname" id="skinname" value="fnalonly" /><input type="hidden" name="previouspage" value="WAYF" />
+                  <button type="submit" name="submit"
+                  class="btn btn-primary submit"
+                  title="Log On"
+                  value="Log On" id="wayflogonbutton">Log On</button>
+                  <button type="submit" name="submit"
+                  class="btn btn-primary submit"
+                  title="Cancel"
+                  value="Cancel" id="wayfcancelbutton">Cancel</button>
+          </form>
+</body></html>
+"""
+
+#: The Shibboleth IdP's local-storage read page (before authentication).
+SHIB_STORAGE_READ_PAGE = """<!DOCTYPE html><html><head>
+        <title>Web Login Service - Loading Session Information</title></head>
+    <body onload="doLoad()">
+<form name="form1" action="/idp/profile/SAML2/Redirect/SSO?execution=e1s1" method="post">
+    <input type="hidden" name="csrf_token" value="_36e65a6a147cd4fed8e860ddf866b338bf74c324" />
+        <input name="shib_idp_ls_exception.shib_idp_session_ss" type="hidden" />
+        <input name="shib_idp_ls_success.shib_idp_session_ss" type="hidden" value="false" />
+        <input name="shib_idp_ls_value.shib_idp_session_ss" type="hidden" />
+        <input name="shib_idp_ls_exception.shib_idp_persistent_ss" type="hidden" />
+        <input name="shib_idp_ls_success.shib_idp_persistent_ss" type="hidden" value="false" />
+        <input name="shib_idp_ls_value.shib_idp_persistent_ss" type="hidden" />
+    <input name="shib_idp_ls_supported" type="hidden" />
+    <input name="_eventId_proceed" type="hidden" />
+    <noscript><input type="submit" value="Continue" /></noscript>
+</form>
+</body></html>
+"""
+
+#: ... and its write page (after authentication, before the SAMLResponse).
+SHIB_STORAGE_WRITE_PAGE = """<!DOCTYPE html><html><head>
+        <title>Web Login Service - Saving Session Information</title></head>
+    <body onload="doLoad()">
+<form name="form1" action="/idp/profile/SAML2/Redirect/SSO?execution=e1s3" method="post">
+    <input type="hidden" name="csrf_token" value="_9a1f" />
+        <input name="shib_idp_ls_exception.shib_idp_session_ss" type="hidden" />
+        <input name="shib_idp_ls_success.shib_idp_session_ss" type="hidden" value="true" />
+    <input name="_eventId_proceed" type="hidden" />
+</form>
+</body></html>
+"""
+
+CIL_CHOOSE_PAGE = CHOOSE_PAGE.replace(RESUME, CIL_RESUME).replace(
+    '<head><base href="https://pingprod.fnal.gov/"/></head>', "<head></head>"
+)
+CIL_LOGIN_PAGE = LOGIN_PAGE.replace(RESUME, CIL_RESUME).replace(
+    '<head><base href="https://pingprod.fnal.gov/"/></head>', "<head></head>"
+)
+
+#: pingprod's postback to idpext, in pingprod's own tag order.
+CIL_PING_POSTBACK = """<html>
+<body onload="document.forms[0].submit()">
+<form method="post" action="{acs}">
+<input type="hidden" name="RelayState" value="e1s2"/>
+<input type="hidden" name="SAMLResponse" value="PHNhbWxwOlJlc3BvbnNlPjwvc2FtbHA6UmVzcG9uc2U+"/>
+</form>
+</body></html>
+""".format(acs=IDPEXT_ACS)
+
+#: The Shibboleth IdP's postback to CILogon: action before method.
+SHIB_POSTBACK_PAGE = """<!DOCTYPE html><html><body onload="document.forms[0].submit()">
+        <form action="https&#x3a;&#x2f;&#x2f;cilogon.org&#x2f;Shibboleth.sso&#x2f;SAML2&#x2f;POST" method="post">
+            <div>
+                <input type="hidden" name="RelayState" value="ss&#x3a;mem&#x3a;4c1d"/>
+                <input type="hidden" name="SAMLResponse" value="PD94bWwgdmVyc2lvbj0iMS4wIj8+"/>
+            </div>
+            <noscript><div><input type="submit" value="Continue"/></div></noscript>
+        </form>
+</body></html>
+"""
+
+CILOGON_SUCCESS_PAGE = """<!DOCTYPE html><html><head><title>CILogon</title></head><body>
+{notice}
+<div class="card-text my-2">You have successfully approved the user code. Please return to your device for further instructions.</div>
+</body></html>
+"""
+
+
+def cilogon_handler(request):
+    """
+    The device approval, from the verification URL to CILogon's success page.
+
+    Redirects are real 302s so requests follows them as it would live.
+    """
+    url, method = request.url, request.method
+    body = request.body or ""
+    if isinstance(body, bytes):
+        body = body.decode()
+    notice = _CILOGON_JS_NOTICE
+    if url.startswith(CILOGON + "/device/"):
+        if method == "GET":
+            if "user_code=" in url:
+                page = CILOGON_WAYF_PAGE
+            else:
+                page = CILOGON_USER_CODE_PAGE.replace("{alert}", "")
+            return (
+                page.format(notice=notice, csrf=CILOGON_CSRF, code=CILOGON_CODE, entity=FNAL_ENTITY),
+                CILOGON_COOKIES,
+            )
+        if "providerId=" in body:
+            if "submit=Cancel" in body:
+                return "<html><body>cancelled</body></html>"
+            return "", (), 302, {"Location": IDPEXT_SSO + "?SAMLRequest=abc&RelayState=ss"}
+        if "user_code=" + CILOGON_CODE in body:
+            return CILOGON_WAYF_PAGE.format(
+                notice=notice, csrf=CILOGON_CSRF, code=CILOGON_CODE, entity=FNAL_ENTITY
+            )
+        return CILOGON_USER_CODE_PAGE.replace("{alert}", CILOGON_CODE_NOT_FOUND).format(
+            notice=notice, csrf=CILOGON_CSRF
+        )
+    if url.startswith(IDPEXT_SSO):
+        if method == "GET" and "SAMLRequest=" in url:
+            return "", ["JSESSIONID=shib-1; Path=/idp; Secure; HttpOnly"], 302, {
+                "Location": IDPEXT_SSO + "?execution=e1s1"
+            }
+        if url.endswith("execution=e1s1"):
+            if method == "GET":
+                return SHIB_STORAGE_READ_PAGE
+            return "", (), 302, {
+                "Location": PING9031 + "/idp/SSO.saml2?SAMLRequest=def&RelayState=e1s2"
+            }
+        if url.endswith("execution=e1s3"):
+            if method == "GET":
+                return SHIB_STORAGE_WRITE_PAGE
+            return SHIB_POSTBACK_PAGE
+    if url.startswith(PING9031 + "/idp/SSO.saml2"):
+        return CIL_CHOOSE_PAGE
+    if CIL_RESUME in url:
+        if method == "POST":
+            return CIL_PING_POSTBACK
+        return CIL_LOGIN_PAGE
+    if url.startswith(IDPEXT_ACS) and method == "POST":
+        return "", (), 302, {"Location": IDPEXT_SSO + "?execution=e1s3"}
+    if url.startswith(CILOGON + "/Shibboleth.sso/SAML2/POST") and method == "POST":
+        return "", ["_shibsession_cil=s-1; path=/; secure; HttpOnly"], 302, {
+            "Location": CILOGON + "/secure/getuser/"
+        }
+    if url.startswith(CILOGON + "/secure/getuser/"):
+        return CILOGON_SUCCESS_PAGE.format(notice=notice)
+    return PLAIN_PAGE

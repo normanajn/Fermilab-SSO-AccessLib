@@ -8,6 +8,7 @@ in your own code.
 - [Install](#install)
 - [Quick start](#quick-start)
 - [Supplying credentials](#supplying-credentials)
+- [Approving a CILogon device-flow request](#approving-a-cilogon-device-flow-request)
 - [Verifying a login with fermi_sso_probe](#verifying-a-login-with-fermi_sso_probe)
 - [Using the session in your own code](#using-the-session-in-your-own-code)
 - [Choosing the right URL](#choosing-the-right-url)
@@ -290,6 +291,68 @@ Notes:
   application 'access_denied'".
 - Wrong PINs count against the token's retry limit (`ykman piv info` shows
   it). Check the readiness report before trying.
+
+## Approving a CILogon device-flow request
+
+OIDC clients that use the device authorization grant against CILogon --
+`htgettoken --headless` for the Fermilab Vault servers, for one -- print a
+verification URL and a user code, then poll until someone approves it in a
+browser. `approve_cilogon_device()` (probe: `--user-code`) does that
+approval with the session's own authentication method.
+
+```bash
+# terminal 1: the client waiting for approval
+htgettoken -a htvaultprod.fnal.gov -i mu2e --headless
+#   ... https://cilogon.org/device/?user_code=N3X-2R4-GRR
+
+# terminal 2: approve it with your Kerberos ticket
+fermi-sso-probe -a kerberos --user-code N3X-2R4-GRR
+```
+
+```python
+s = FermiSSOSession(auth_method="kerberos")
+result = s.approve_cilogon_device("https://cilogon.org/device/?user_code=N3X-2R4-GRR")
+print(result.ok, result.reasons, result.response.url)
+```
+
+The sequence, as served on 2026-10-19:
+
+```
+GET  cilogon.org/device/?user_code=...   consent + identity-provider form
+POST cilogon.org/device/                 providerId=https://idp.fnal.gov/idp/shibboleth,
+                                          submit=Log On
+  -> 302 idpext.fnal.gov/idp/profile/SAML2/Redirect/SSO
+POST idpext ... ?execution=e1s1          Shibboleth client-storage read form
+  -> 302 pingprod.fnal.gov:9031/idp/SSO.saml2 (AuthnRequest, redirect binding)
+       choose page / login form / Kerberos / YubiKey, as for any SAML site
+POST idpext .../Authn/SAML2/POST/SSO     pingprod's SAMLResponse
+POST idpext ... ?execution=e1s3          Shibboleth client-storage write form
+POST cilogon.org/Shibboleth.sso/SAML2/POST   idpext's SAMLResponse
+  -> 302 cilogon.org/secure/getuser/      CILogon's result page
+```
+
+Things to know:
+
+- **The identity-provider page is the consent page.** On a device request
+  CILogon lists the client (`htvaultprod-mu2e-vault`) and the attributes it
+  will receive above the "Log On" button. Submitting it approves the request,
+  so only pass codes from clients you started yourself.
+- **The bare `/device/` page asks for the code.** With the
+  `verification_uri_complete` URL or a bare code the session never sees that
+  form; on a bare `/device/` URL it fills in `cilogon_user_code=` if given,
+  and otherwise stops and says so.
+- **Fermilab's entityID** is `https://idp.fnal.gov/idp/shibboleth`
+  (`FERMILAB_CILOGON_IDP`). CILogon sends it to `idpext.fnal.gov`, a
+  Shibboleth IdP that proxies to pingprod's SAML connection, so the choose
+  page offers the SAML adapter list (`ad..KrbOrForm`, `ad..FNALYubikey`, ...).
+  Pass `cilogon_idp=` (probe `--cilogon-idp`) for another provider; the
+  pages after CILogon must then be ones this library can answer.
+- **Success** means the walk ended on CILogon with no error alert and none
+  of CILogon's forms pending (`cilogon_problems()`). CILogon errors such as
+  "User code not found" are reported verbatim. The client's token poll is
+  the final confirmation.
+- **MFA**: as for any site, an MFA-enrolled account cannot use the password
+  adapter. Kerberos and the YubiKey are the non-interactive routes.
 
 ## Reusing cookies instead of a password
 
@@ -642,6 +705,18 @@ assertion was not posted back. Usually a service-provider-side problem.
 **`stranded on pingprod.fnal.gov`** — the flow ended on the IdP at a page the
 library does not recognize, such as an error or consent interstitial. Dump it
 with `-o /tmp/page.html` and read it.
+
+**`the login did not return to CILogon (stopped on pingprod.fnal.gov)`** —
+a CILogon approval stopped at the identity provider. The other reasons
+printed with it say why (login form, Negotiate challenge, ...).
+
+**`CILogon reported: Error: User code not found.`** — the code is wrong,
+already used, or expired (CILogon codes last minutes). Start the client
+again and use its new code.
+
+**`stopped on a Shibboleth client-storage form at idpext.fnal.gov`** — the
+Shibboleth proxy served more storage forms in a row than the library
+answers. Dump the page with `-o` and `-d`.
 
 **`password contains ':'`** — `FermiSSOSession` packs credentials as
 `"user:pass"` and splits on every colon, so a colon in the password cannot be

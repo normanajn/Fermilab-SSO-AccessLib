@@ -172,3 +172,27 @@ refresh when it expires, quiet output, exit status 0/1/2:
 fermi-sso-probe --env-file ~/.fermi_sso.env -c ~/.fermi_sso.cookies -n -q \
     -x "Document" https://mu2e-docdb.fnal.gov/cgi-bin/sso/DocumentDatabase
 ```
+
+## 11. CILogon device code (htgettoken --headless, Vault)
+
+A device-flow client prints a CILogon URL and code. Approve it from the same
+machine instead of a phone. Checked against cilogon.org and idpext.fnal.gov
+on 2026-10-19 as far as pingprod's choose and login pages.
+
+```bash
+htgettoken -a htvaultprod.fnal.gov -i mu2e --headless &   # prints the code
+fermi-sso-probe -a kerberos --user-code N3X-2R4-GRR
+# RESULT: login SUCCEEDED
+#   landed on https://cilogon.org/secure/getuser/
+wait                                                      # htgettoken's poll completes
+```
+
+```python
+s = FermiSSOSession(auth_method="kerberos")
+result = s.approve_cilogon_device("https://cilogon.org/device/?user_code=N3X-2R4-GRR")
+if not result.ok:
+    raise SystemExit("; ".join(result.reasons))
+```
+
+A wrong or expired code is reported as
+`CILogon reported: Error: User code not found.`
