@@ -25,11 +25,18 @@ If `fermi-sso-probe` is not on PATH, use `$FERMI_SSO_HOME/venv/bin/fermi-sso-pro
 | Situation | Mode | Command shape |
 |---|---|---|
 | Service ("special") account, no MFA | password | `fermi-sso-probe -u USER -c JAR URL` |
-| `kinit` ticket present | kerberos | `fermi-sso-probe -a kerberos -c JAR URL` |
+| FERMI.WIN.FNAL.GOV ticket (not FNAL.GOV) | kerberos | `fermi-sso-probe -a kerberos -c JAR URL` |
 | YubiKey PIV, OIDC site (not DocDB) | yubikey | `fermi-sso-probe -a yubikey -c JAR URL` (real terminal, PIN prompt) |
 | Jar from an earlier login | cookies | `fermi-sso-probe -c JAR -n URL` |
 | MFA-enrolled personal account | browser export | `fermi-sso-probe -c ~/Downloads/HOST_cookies.txt --no-save-cookies -n URL` |
-| CILogon device code to approve | any of the above | `fermi-sso-probe -a kerberos --user-code CODE` |
+| CILogon device code to approve | yubikey (or password) | `fermi-sso-probe -a yubikey --user-code CODE` |
+
+**Do not use Kerberos for SSO with an ordinary `kinit` ticket.** Fermilab has
+two separate realms: FNAL.GOV (plain `kinit`, what Vault and htgettoken's
+Kerberos login use) and FERMI.WIN.FNAL.GOV (what pingprod's SSO uses). An
+FNAL.GOV ticket is refused at pingprod with "Clients credentials have been
+revoked"; that is the realm mismatch, not an account problem. Default to
+the YubiKey or a cookie jar.
 
 Conventional jar: `~/.fermi_sso.cookies`. One jar covers all sites on the
 same IdP connection: OIDC sites (mu2e-shifts, Mu2eTalks, SCD Reporting)
@@ -79,11 +86,11 @@ poll is the final word.
 
 ```bash
 htgettoken -a htvaultprod.fnal.gov -i mu2e --headless &    # prints CODE
-fermi-sso-probe -a kerberos --user-code CODE               # or the full URL
+fermi-sso-probe -a yubikey --user-code CODE                # or the full URL
 ```
 
 ```python
-r = FermiSSOSession(auth_method="kerberos").approve_cilogon_device(code_or_url)
+r = FermiSSOSession(auth_method="yubikey", cert_hop=YubiKeyCertHop()).approve_cilogon_device(code_or_url)
 r.ok, r.reasons, r.response
 ```
 
@@ -92,11 +99,12 @@ r.ok, r.reasons, r.response
 - Codes are single-use and expire in minutes. Do not retry a failed one;
   restart the client for a new code.
 - The pingprod connection behind CILogon is the SAML one (`ad..KrbOrForm`,
-  `ad..FNALYubikey`, ...), so Kerberos, YubiKey and password all apply.
-  MFA accounts still cannot use the password path.
+  `ad..FNALYubikey`, ...). Use the YubiKey; password only for non-MFA
+  service accounts; Kerberos only with a FERMI.WIN.FNAL.GOV ticket.
 - Live-verified end to end 2026-10-19 with `-a yubikey`.
 - htgettoken (normanajn fork, `feature/sso-approve`) can do this itself:
-  `htgettoken -a VAULT -i ISSUER --ssoapprove=kerberos|yubikey|password`
+  `htgettoken -a VAULT -i ISSUER --ssoapprove=yubikey|password` (no
+  kerberos, by design: htgettoken's ticket is FNAL.GOV)
   (implies `--headless`; `--ssocookiefile`, `--ssopinfile`, `--ssoidp`).
   OIDC only runs when the cached vault token and Kerberos-to-Vault
   logins fail, so force it with `--nokerberos --nossh
@@ -144,8 +152,9 @@ mu2e-talks), and the probe reports "landed on an application sign-in page".
 - `the identity provider is throttling sign-ons`: the "Multiple Sign-On
   Delay" page. Wait a few minutes; do not loop retries.
 - `requires a second factor (RSA SecurID ...)`: Workday. Not supported.
-- Kerberos 401 or challenge unanswered: `klist`, then
-  `kgetcred HTTP/pingprod.fnal.gov@FERMI.WIN.FNAL.GOV`.
+- Kerberos 401 or challenge unanswered: `klist` will usually show an
+  FNAL.GOV ticket, which pingprod (FERMI.WIN.FNAL.GOV) refuses. Switch to
+  `-a yubikey`; do not chase it as an account problem.
 - `stranded on pingprod.fnal.gov`: dump it with `-o page.html -d` and read it.
 - `the login did not return to CILogon (stopped on HOST)`: a CILogon
   approval stopped at the IdP; the reasons listed with it say why.

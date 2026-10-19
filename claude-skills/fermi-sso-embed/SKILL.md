@@ -47,8 +47,10 @@ r = s.get(url)
 ok, reasons = fermi_sso_probe.classify(s, r, idp_host="pingprod.fnal.gov", expect="Dashboard")
 ```
 
-- Kerberos: `auth_method="kerberos"`. This uses the local ticket cache;
-  `spnego_auth=` overrides the handler.
+- Kerberos: `auth_method="kerberos"`. This uses the local ticket cache,
+  which must hold a **FERMI.WIN.FNAL.GOV** ticket: pingprod refuses the
+  FNAL.GOV ticket a plain `kinit` gives (the one Vault accepts). Do not
+  make Kerberos the default for SSO. `spnego_auth=` overrides the handler.
 - YubiKey: `auth_method="yubikey", cert_hop=fermi_sso_yubikey.YubiKeyCertHop(pin_source=...)`.
   Without `cert_hop` the constructor raises `ValueError`. It works on OIDC
   sites only (DocDB's SAML connection does not offer it), and it needs a TTY
@@ -92,8 +94,8 @@ ok, reasons = fermi_sso_probe.classify(s, r, idp_host="pingprod.fnal.gov", expec
    `find_env_file()` and `resolve()` implement the env-file part and
    can be reused.
 3. **No secrets in config or code.** Read the password only from
-   `FERMI_PASSWORD` or a mode-600 env file. Prefer cookie-jar or Kerberos
-   in production; a password is needed only to refresh an expired jar.
+   `FERMI_PASSWORD` or a mode-600 env file. Prefer a cookie jar or the
+   YubiKey in production; a password is needed only to refresh an expired jar.
    Treat the jar as a bearer credential: mode 600, local disk, never
    committed or logged (add it to `.gitignore`).
 4. **Handle jar expiry.** A dead jar shows up as a failed `classify()`, not
