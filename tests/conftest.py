@@ -652,7 +652,9 @@ SHIB_POSTBACK_PAGE = """<!DOCTYPE html><html><body onload="document.forms[0].sub
 </body></html>
 """
 
-CILOGON_SUCCESS_PAGE = """<!DOCTYPE html><html><head><title>CILogon</title></head><body>
+#: CILogon's result page, as served at the end of a live YubiKey approval on
+#: 2026-10-19: no forms, only the JavaScript notice in alert style.
+CILOGON_SUCCESS_PAGE = """<!DOCTYPE html><html><head><title>User Code Approval</title></head><body>
 {notice}
 <div class="card-text my-2">You have successfully approved the user code. Please return to your device for further instructions.</div>
 </body></html>

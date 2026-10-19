@@ -176,8 +176,8 @@ fermi-sso-probe --env-file ~/.fermi_sso.env -c ~/.fermi_sso.cookies -n -q \
 ## 11. CILogon device code (htgettoken --headless, Vault)
 
 A device-flow client prints a CILogon URL and code. Approve it from the same
-machine instead of a phone. Checked against cilogon.org and idpext.fnal.gov
-on 2026-10-19 as far as pingprod's choose and login pages.
+machine instead of a phone. Run end to end on 2026-10-19 with the YubiKey
+(`-a yubikey`): CILogon approved the code and htgettoken stored its tokens.
 
 ```bash
 htgettoken -a htvaultprod.fnal.gov -i mu2e --headless &   # prints the code
