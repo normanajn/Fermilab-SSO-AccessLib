@@ -94,8 +94,13 @@ r.ok, r.reasons, r.response
 - The pingprod connection behind CILogon is the SAML one (`ad..KrbOrForm`,
   `ad..FNALYubikey`, ...), so Kerberos, YubiKey and password all apply.
   MFA accounts still cannot use the password path.
-- Live-verified 2026-10-19 as far as pingprod's login form. The full
-  approval is covered by offline fixtures only.
+- Live-verified end to end 2026-10-19 with `-a yubikey`.
+- htgettoken (normanajn fork, `feature/sso-approve`) can do this itself:
+  `htgettoken -a VAULT -i ISSUER --ssoapprove=kerberos|yubikey|password`
+  (implies `--headless`; `--ssocookiefile`, `--ssopinfile`, `--ssoidp`).
+  OIDC only runs when the cached vault token and Kerberos-to-Vault
+  logins fail, so force it with `--nokerberos --nossh
+  --vaulttokeninfile /nonexistent` when testing.
 
 ## fermi-sso-cookies (offline)
 
