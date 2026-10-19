@@ -156,6 +156,21 @@ fermi-sso-cookies ~/.fermi_sso.cookies
 fermi-sso-cookies -D pingprod.fnal.gov -l ~/.fermi_sso.cookies   # is the IdP session still live?
 ```
 
+### Claude Code skills
+
+`claude-skills/` holds two Claude Code skills: `fermi-sso` (running the
+tools, diagnosing logins) and `fermi-sso-embed` (using `FermiSSOSession` in
+another project). Install them at user level so every session sees them:
+
+```
+./install-claude-skills.sh          # ${CLAUDE_CONFIG_DIR:-~/.claude}
+./install-claude-skills.sh -a       # every ~/.claude* config dir
+./install-claude-skills.sh -l       # symlink instead of copy
+.\install-claude-skills.ps1 -All    # Windows
+```
+
+See `man ./man/install-claude-skills.sh.1`.
+
 ### Documentation
 
 - [docs/EXAMPLES.md](docs/EXAMPLES.md) — copy-paste recipes for DocDB, the shift scheduler, Mu2eTalks, ServiceNow, Kerberos, the YubiKey, and CILogon device codes
@@ -163,6 +178,7 @@ fermi-sso-cookies -D pingprod.fnal.gov -l ~/.fermi_sso.cookies   # is the IdP se
 - [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) — external dependencies per authentication method, with install commands per platform
 - `examples/` — small hand-run scripts; start with `check_cdcvs_login.py`
 - `man ./man/bootstrap.sh.1` — the bootstrap script
+- `man ./man/install-claude-skills.sh.1` — the Claude Code skills installer
 - `man ./man/fermi_sso_probe.1` — the probe utility
 - `man ./man/fermi_sso_cookies.1` — the cookie jar inspector
 - `man ./man/FermiSSOSession.3` — the library API
