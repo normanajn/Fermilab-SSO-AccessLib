@@ -26,13 +26,18 @@ See fermi_sso_probe(1) and docs/HOWTO.md.
 
 import argparse
 import getpass
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 import os
 import stat
 import sys
 from typing import Dict, List, Optional, Tuple
 
-from requests_fermi_sso import FermiSSOSession
+from requests_fermi_sso import (
+    CILOGON_DEVICE_URL,
+    CILOGON_HOSTS,
+    FERMILAB_CILOGON_IDP,
+    FermiSSOSession,
+)
 from requests_fermi_sso import __version__ as _lib_version
 
 #: single source of truth lives in the library module
@@ -59,6 +64,8 @@ ENV_COOKIE_FILE = "FERMI_SSO_COOKIE_FILE"
 ENV_AUTH = "FERMI_SSO_AUTH"
 ENV_PIN_SOURCE = "FERMI_SSO_PIN_SOURCE"
 ENV_COOKIE_FORMAT = "FERMI_SSO_COOKIE_FORMAT"
+ENV_USER_CODE = "FERMI_SSO_USER_CODE"
+ENV_CILOGON_IDP = "FERMI_SSO_CILOGON_IDP"
 
 
 # --------------------------------------------------------------------------
@@ -259,8 +266,18 @@ def classify(
                 "still on the login form -- wrong password, or the account "
                 "requires MFA (this package only drives password auth)"
             )
-    if session.postback_form_re.search(resp.text):
+    if session.is_postback_page(resp):
         reasons.append("stopped on the SAML postback form; it was not submitted")
+    if session.is_shib_storage_page(resp):
+        reasons.append(
+            f"stopped on a Shibboleth client-storage form at "
+            f"{urlsplit(resp.url).hostname}; it was not submitted"
+        )
+    final_host = (urlsplit(resp.url).hostname or "").lower()
+    if final_host in CILOGON_HOSTS:
+        # CILogon's pages are neither the IdP nor the application: a device
+        # approval ends on CILogon itself, and its errors are alert boxes
+        reasons.extend(session.cilogon_problems(resp))
     denied = [h for h in list(resp.history) + [resp] if "error=access_denied" in h.url]
     if denied:
         reasons.append(
@@ -274,16 +291,16 @@ def classify(
     ):
         reasons.append(
             "the identity provider's Kerberos (Negotiate) challenge was not "
-            "answered: no ticket, or the KDC refused a service ticket for "
-            f"HTTP/{urlsplit(resp.url).hostname}; check klist, kinit, and "
-            "the realm of that principal"
+            "answered: it needs a FERMI.WIN.FNAL.GOV ticket for "
+            f"HTTP/{urlsplit(resp.url).hostname}, and an FNAL.GOV ticket "
+            "(the kind Vault accepts) is refused; check klist, or use "
+            "--auth yubikey"
         )
     if SECOND_FACTOR_RE.search(resp.text):
         reasons.append(
             "the identity provider requires a second factor (RSA SecurID "
             "passcode form); this package cannot supply one"
         )
-    final_host = (urlsplit(resp.url).hostname or "").lower()
     if idp_host and final_host == idp_host.lower() and not reasons:
         reasons.append(f"stranded on {idp_host} at an unrecognized page")
     title = _page_title(resp.text)
@@ -394,6 +411,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="load the cookie file but never rewrite it",
     )
     parser.add_argument(
+        "--user-code",
+        metavar="CODE",
+        default=None,
+        help=f"approve this CILogon device-flow user code (${ENV_USER_CODE}); "
+        f"with no URL, fetches {CILOGON_DEVICE_URL}?user_code=CODE. Also "
+        f"entered if CILogon asks for a code on a URL given explicitly",
+    )
+    parser.add_argument(
+        "--cilogon-idp",
+        metavar="ENTITYID",
+        default=None,
+        help=f"identity provider to select on CILogon's page "
+        f"(${ENV_CILOGON_IDP}; default {FERMILAB_CILOGON_IDP})",
+    )
+    parser.add_argument(
         "--idp-host",
         default=None,
         help=f"identity provider hostname used to detect a stalled login "
@@ -460,7 +492,14 @@ def main(argv=None) -> int:
             return 2
         dotenv = load_env_file(env_path, warn=warn)
 
-    url = resolve(args.url_opt or args.url, ENV_URL, environ, dotenv, DEFAULT_URL)
+    user_code = resolve(args.user_code, ENV_USER_CODE, environ, dotenv)
+    cilogon_idp = resolve(
+        args.cilogon_idp, ENV_CILOGON_IDP, environ, dotenv, FERMILAB_CILOGON_IDP
+    )
+    default_url = DEFAULT_URL
+    if user_code:
+        default_url = CILOGON_DEVICE_URL + "?" + urlencode({"user_code": user_code})
+    url = resolve(args.url_opt or args.url, ENV_URL, environ, dotenv, default_url)
     user = resolve(args.user, ENV_USER, environ, dotenv, environ.get("USER"))
     idp_host = resolve(args.idp_host, ENV_IDP_HOST, environ, dotenv, DEFAULT_IDP_HOST)
     debug = args.debug
@@ -514,7 +553,9 @@ def main(argv=None) -> int:
     if debug:
         enable_debug()
 
-    session_kwargs = {"auth_method": auth_method}
+    session_kwargs = {"auth_method": auth_method, "cilogon_idp": cilogon_idp}
+    if user_code:
+        session_kwargs["cilogon_user_code"] = user_code
     if auth_method == "yubikey":
         from fermi_sso_yubikey import YubiKeyCertHop
 

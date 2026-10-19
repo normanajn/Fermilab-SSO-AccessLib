@@ -109,9 +109,11 @@ if r.status_code == 401:
     raise SystemExit("Kerberos challenge not answered; check klist")
 ```
 
-Note: on this site the IdP's principal lives in FERMI.WIN.FNAL.GOV. If the
-probe reports the challenge unanswered, run
-`kgetcred HTTP/pingprod.fnal.gov@FERMI.WIN.FNAL.GOV` to see the KDC's answer.
+Note: the ticket must be in **FERMI.WIN.FNAL.GOV**. Fermilab's two Kerberos
+realms are separate: the FNAL.GOV ticket a plain `kinit` gives you, which
+Vault accepts, is refused here ("Clients credentials have been revoked" from
+`kgetcred HTTP/pingprod.fnal.gov@FERMI.WIN.FNAL.GOV`). Without a FERMI.WIN
+ticket, use §7.
 
 ## 7. YubiKey (PIV certificate), from a terminal
 
@@ -172,3 +174,29 @@ refresh when it expires, quiet output, exit status 0/1/2:
 fermi-sso-probe --env-file ~/.fermi_sso.env -c ~/.fermi_sso.cookies -n -q \
     -x "Document" https://mu2e-docdb.fnal.gov/cgi-bin/sso/DocumentDatabase
 ```
+
+## 11. CILogon device code (htgettoken --headless, Vault)
+
+A device-flow client prints a CILogon URL and code. Approve it from the same
+machine instead of a phone. Run end to end on 2026-10-19 with the YubiKey
+(`-a yubikey`): CILogon approved the code and htgettoken stored its tokens.
+
+```bash
+htgettoken -a htvaultprod.fnal.gov -i mu2e --headless &   # prints the code
+fermi-sso-probe -a yubikey --user-code N3X-2R4-GRR
+# RESULT: login SUCCEEDED
+#   landed on https://cilogon.org/secure/getuser/
+wait                                                      # htgettoken's poll completes
+```
+
+```python
+from fermi_sso_yubikey import YubiKeyCertHop
+
+s = FermiSSOSession(auth_method="yubikey", cert_hop=YubiKeyCertHop())
+result = s.approve_cilogon_device("https://cilogon.org/device/?user_code=N3X-2R4-GRR")
+if not result.ok:
+    raise SystemExit("; ".join(result.reasons))
+```
+
+A wrong or expired code is reported as
+`CILogon reported: Error: User code not found.`
