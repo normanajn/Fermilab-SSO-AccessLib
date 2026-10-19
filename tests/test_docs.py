@@ -49,6 +49,15 @@ def test_bootstrap_has_a_man_page():
     assert os.path.exists(os.path.join(ROOT, "man", "bootstrap.sh.1"))
 
 
+def test_claude_skills_installer_and_skills():
+    assert os.path.isfile(os.path.join(ROOT, "man", "install-claude-skills.sh.1"))
+    assert os.path.isfile(os.path.join(ROOT, "install-claude-skills.ps1"))
+    assert os.access(os.path.join(ROOT, "install-claude-skills.sh"), os.X_OK)
+    for name in ("fermi-sso", "fermi-sso-embed"):
+        head = read("claude-skills", name, "SKILL.md").split("---")[1]
+        assert f"name: {name}\n" in head and "description: " in head
+
+
 def test_no_test_shaped_scripts_outside_the_tests_directory():
     """
     A file matching pytest's default test*.py pattern at the repository root

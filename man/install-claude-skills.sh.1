@@ -1,0 +1,146 @@
+.TH INSTALL-CLAUDE-SKILLS.SH 1 "2026-09-28" "requests-fermi-sso 0.2.0" "User Commands"
+.SH NAME
+install-claude-skills.sh, install-claude-skills.ps1 \- install Claude Code skills
+.SH SYNOPSIS
+.B ./install-claude-skills.sh
+.RB [ \-t
+.IR DIR ]...
+.RB [ \-a ]
+.RB [ \-l ]
+.RB [ \-u ]
+.RB [ \-f ]
+.RB [ \-n ]
+.br
+.B .\einstall-claude-skills.ps1
+.RB [ \-Target
+.IR DIR [, DIR ...]]
+.RB [ \-All ]
+.RB [ \-Link ]
+.RB [ \-Uninstall ]
+.RB [ \-Force ]
+.RB [ \-DryRun ]
+.SH DESCRIPTION
+Installs the Claude Code skills shipped in
+.I claude-skills/
+at user level, so every Claude Code session that uses the target config
+directory sees them, whatever project it is started in.
+.PP
+The skills are:
+.TP
+.B fermi-sso
+Running
+.BR fermi-sso-probe (1),
+.BR fermi-sso-cookies (1)
+and
+.B fermi-sso-yubikey
+to log in to Fermilab SSO, check or reuse a cookie jar, and diagnose failures.
+.TP
+.B fermi-sso-embed
+Adding
+.BR FermiSSOSession (3)
+to another project: pinned dependency, configuration, success checks,
+threading, offline tests.
+.PP
+Each skill directory
+.IR claude-skills/NAME/
+is placed at
+.IR DIR/skills/NAME/ .
+A config directory is shared by every settings profile that uses it (for
+example several
+.I settings-*.json
+files in
+.IR ~/.claude ),
+so one install covers all of them. Separate config directories selected
+with
+.B CLAUDE_CONFIG_DIR
+each need their own install; use
+.BR \-a .
+.PP
+A copied skill carries a
+.I .installed-from-requests-fermi-sso
+marker; a linked one is a symlink (a junction on Windows). Only skills
+with one of those are replaced or removed without
+.BR \-f ,
+so a hand-edited skill of the same name is not lost silently. Re-running
+updates the installed copies in place.
+.PP
+The Windows script takes the same options in PowerShell form and behaves
+the same way.
+.SH OPTIONS
+.TP
+.BR \-t ", " \-\-target " \fIDIR\fR"
+Claude config directory to install into. Repeatable. Default:
+.B $CLAUDE_CONFIG_DIR
+if set, else
+.IR ~/.claude .
+.TP
+.BR \-a ", " \-\-all
+Also install into every Claude Code config directory found:
+.IR ~/.claude ,
+each
+.IR ~/.claude\-* ,
+and
+.BR $CLAUDE_CONFIG_DIR .
+A directory qualifies if it holds
+.IR settings.json ,
+.IR projects/ ,
+.IR skills/ ,
+.IR CLAUDE.md ,
+.I sessions/
+or
+.IR plugins/ ;
+others are reported as skipped and can be named with
+.BR \-t .
+.TP
+.BR \-l ", " \-\-link
+Symlink instead of copying, so edits in the checkout take effect
+immediately. Links point at this checkout; do not use it from a worktree
+or checkout you plan to delete.
+.TP
+.BR \-u ", " \-\-uninstall
+Remove the skills.
+.TP
+.BR \-f ", " \-\-force
+Replace or remove a same-named skill that this script did not install.
+.TP
+.BR \-n ", " \-\-dry\-run
+Print what would be done and change nothing.
+.TP
+.BR \-h ", " \-\-help
+Print the usage summary and exit.
+.SH ENVIRONMENT
+.TP
+.B CLAUDE_CONFIG_DIR
+Default target when no
+.B \-t
+is given; also included by
+.BR \-a .
+.SH EXAMPLES
+.nf
+\&./install-claude-skills.sh                  # ~/.claude
+\&./install-claude-skills.sh \-a \-n            # preview every config dir
+\&./install-claude-skills.sh \-a               # install everywhere
+\&./install-claude-skills.sh \-l               # symlink, for skill development
+\&./install-claude-skills.sh \-t ~/.claude\-personal
+\&./install-claude-skills.sh \-a \-u            # remove everywhere
+.fi
+.PP
+Windows:
+.nf
+powershell \-ExecutionPolicy Bypass \-File .\einstall-claude-skills.ps1 \-All
+.fi
+.SH EXIT STATUS
+0 on success, 1 if
+.I claude-skills/
+is missing, 2 on a usage error. A skill that is kept rather than
+replaced is reported, not treated as an error.
+.SH NOTES
+Claude Code picks up new or changed user-level skills without a restart.
+The claude.ai web and desktop apps do not read these directories; upload
+a skill there as a zip of its directory.
+.SH SEE ALSO
+.BR fermi-sso-probe (1),
+.BR fermi-sso-cookies (1),
+.BR FermiSSOSession (3),
+.BR fermi_sso_yubikey (3),
+.BR bootstrap.sh (1)
