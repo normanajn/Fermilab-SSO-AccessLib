@@ -99,15 +99,21 @@ def test_every_module_reports_the_same_version():
 
 
 def test_setup_py_reports_the_library_version():
-    import re
+    import importlib.util
     import subprocess
 
     import requests_fermi_sso
 
-    out = subprocess.run(
+    # A modern venv has no setuptools: pip only installs it inside its
+    # isolated build environment, so setup.py cannot run here directly.
+    if importlib.util.find_spec("setuptools") is None:
+        pytest.skip("setuptools is not installed in this interpreter")
+
+    proc = subprocess.run(
         [sys.executable, SETUP_PY, "--version"],
         capture_output=True,
         text=True,
         cwd=os.path.dirname(SETUP_PY),
-    ).stdout
-    assert out.strip().splitlines()[-1] == requests_fermi_sso.__version__
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip().splitlines()[-1] == requests_fermi_sso.__version__
