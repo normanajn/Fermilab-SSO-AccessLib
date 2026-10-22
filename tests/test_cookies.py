@@ -115,10 +115,22 @@ def test_session_cookies_are_written_not_dropped(tmp_path):
     assert "\t0\t" + SP_COOKIE in text  # session cookie has expiry 0
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="Windows ignores the POSIX mode: it reports 0666 whatever the ACL says",
+)
 def test_save_creates_file_mode_600(tmp_path):
     path = str(tmp_path / "cookies.txt")
     _jar_session().save_cookies(path)
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    assert not [f for f in os.listdir(str(tmp_path)) if f.endswith(".tmp")]
+
+
+def test_save_leaves_no_temp_file(tmp_path):
+    # the mode assertion above cannot run on Windows; the atomic-rename part
+    # of the same behaviour can
+    path = str(tmp_path / "cookies.txt")
+    _jar_session().save_cookies(path)
     assert not [f for f in os.listdir(str(tmp_path)) if f.endswith(".tmp")]
 
 
@@ -268,9 +280,15 @@ def test_missing_cookie_file_raises_from_explicit_load(tmp_path):
 
 
 def test_cookie_file_expands_tilde(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    # ntpath.expanduser reads USERPROFILE and ignores HOME; posixpath does the
+    # opposite, so set whichever one this platform actually consults
+    monkeypatch.setenv("USERPROFILE" if os.name == "nt" else "HOME", str(tmp_path))
     s = FermiSSOSession(cookie_file="~/jar.txt")
-    assert s.cookie_file == str(tmp_path / "jar.txt")
+    # expanduser substitutes the "~" only, so the separator it was given
+    # survives; normpath makes the comparison separator-agnostic
+    assert os.path.normpath(s.cookie_file) == os.path.normpath(
+        str(tmp_path / "jar.txt")
+    )
 
 
 def test_cookie_kwargs_are_not_passed_to_requests_session(tmp_path):

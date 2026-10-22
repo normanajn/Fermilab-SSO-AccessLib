@@ -139,13 +139,20 @@ def load_env_file(path: Optional[str], warn=None) -> Dict[str, str]:
     if not path:
         return {}
     try:
-        with open(path, "r", encoding="utf-8") as handle:
+        # utf-8-sig, not utf-8: Notepad, VS Code's "UTF-8 with BOM" and
+        # PowerShell's Set-Content -Encoding utf8 all write a byte-order mark,
+        # which would otherwise become part of the first variable's name and
+        # make that one variable silently unreachable.
+        with open(path, "r", encoding="utf-8-sig") as handle:
             text = handle.read()
     except OSError as exc:
         if warn:
             warn(f"warning: cannot read env file {path}: {exc}")
         return {}
-    if warn:
+    # Windows reports 0666 for every file regardless of its real ACL, so the
+    # check below would warn every time and ask for something chmod cannot do
+    # there.  cookie_permission_warning() in fermi_sso_cookies skips nt too.
+    if warn and os.name != "nt":
         try:
             mode = os.stat(path).st_mode
             if mode & (stat.S_IRGRP | stat.S_IROTH):

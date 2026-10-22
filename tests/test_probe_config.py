@@ -3,6 +3,8 @@ Tests for fermi_sso_probe: .env parsing, the settings precedence chain, and
 the success/failure classifier.
 """
 
+import os
+
 import pytest
 
 import fermi_sso_probe as probe
@@ -77,9 +79,15 @@ def test_load_env_file_returns_empty_for_none():
     assert probe.load_env_file(None) == {}
 
 
-def test_load_env_file_warns_when_world_readable(tmp_path):
-    import os
+skip_on_windows_modes = pytest.mark.skipif(
+    os.name == "nt",
+    reason="Windows reports 0666 for every file whatever the ACL says, so "
+    "load_env_file does not check the mode there",
+)
 
+
+@skip_on_windows_modes
+def test_load_env_file_warns_when_world_readable(tmp_path):
     path = tmp_path / ".env"
     path.write_text("FERMI_PASSWORD=hunter2\n")
     os.chmod(str(path), 0o644)
@@ -88,15 +96,25 @@ def test_load_env_file_warns_when_world_readable(tmp_path):
     assert any("readable by group/other" in w for w in warnings)
 
 
+@skip_on_windows_modes
 def test_load_env_file_quiet_when_mode_is_600(tmp_path):
-    import os
-
     path = tmp_path / ".env"
     path.write_text("FERMI_PASSWORD=hunter2\n")
     os.chmod(str(path), 0o600)
     warnings = []
     probe.load_env_file(str(path), warn=warnings.append)
     assert warnings == []
+
+
+def test_load_env_file_strips_a_byte_order_mark(tmp_path):
+    # Windows editors write a BOM; without utf-8-sig it would become part of
+    # the first variable's name and that variable would go missing
+    path = tmp_path / ".env"
+    path.write_bytes(b"\xef\xbb\xbfFERMI_USER=someone\nFERMI_PASSWORD=hunter2\n")
+    assert probe.load_env_file(str(path)) == {
+        "FERMI_USER": "someone",
+        "FERMI_PASSWORD": "hunter2",
+    }
 
 
 # --------------------------------------------------------------------------
