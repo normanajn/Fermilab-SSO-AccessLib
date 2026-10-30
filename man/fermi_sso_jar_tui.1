@@ -1,0 +1,101 @@
+.TH FERMI_SSO_JAR_TUI 1 "2026-10-30" "requests-fermi-sso 0.4.0" "User Commands"
+.SH NAME
+fermi_sso_jar_tui \- terminal viewer for the Fermilab SSO cookie jar
+.SH SYNOPSIS
+.B fermi_sso_jar_tui
+.RI [ OPTIONS ]
+.SH DESCRIPTION
+.B fermi_sso_jar_tui
+is a curses front end to the engine behind
+.BR fermi_sso_jar (1).
+The top pane lists the identity provider and every catalog site with the
+state of its cookies in the jar, coloured live (green), soon (yellow),
+session (cyan), expired (red) or absent (magenta); the bottom pane shows
+the cookies of the selected row with their expiry and flags, values
+masked. Keys prime, refresh, verify and clear through the same
+.BR JarManager ,
+so anything the command line can do the viewer can too.
+.PP
+Network work runs in a daemon thread and the screen keeps updating while
+it is in flight; results arrive on the status line. The jar is re\-read
+every five seconds, so a login performed by another process (the probe, a
+script, the Qt viewer) shows up without a keypress.
+.PP
+A prime or refresh that needs a password asks for it on the bottom line.
+The password is kept for the rest of the run only; the jar, not the
+password, is what persists.
+.SH KEYS
+.TP
+.BR "up/down" ", " j / k
+Select a site.
+.TP
+.B enter
+Toggle the cookie detail pane.
+.TP
+.B p
+Prime the selected site: log in if its cookies do not sign in, save the jar.
+.TP
+.B P
+Prime every site, in sequence through one identity\-provider session.
+.TP
+.B R
+Refresh: prime only the sites that are absent, expired or expiring soon.
+.TP
+.B v
+Verify the selected site, cookies only, against the network.
+.TP
+.B V
+Verify every site.
+.TP
+.B c
+Clear the selected site's cookies from the jar (asks first). On the
+.B idp
+row, clears the identity provider's cookies.
+.TP
+.B x
+Purge expired cookies.
+.TP
+.B s
+Show or mask cookie values. They are bearer credentials.
+.TP
+.B r
+Re\-read the jar now.
+.TP
+.B ?
+Help.
+.TP
+.B q
+Quit.
+.SH OPTIONS
+The common and credential options of
+.BR fermi_sso_jar (1):
+.BI \-c " FILE" ,
+.BI \-\-cookie\-format " FORMAT" ,
+.BI \-e " FILE" ,
+.BR \-\-no\-env\-file ,
+.BI \-S " FILE" ,
+.BR \-\-no\-builtin\-sites ,
+.BI \-\-margin " SECONDS" ,
+.BI \-\-idp\-host " HOST" ,
+.BI \-u " USER" ,
+.BI \-\-password\-env " NAME" ,
+.BI \-a " METHOD" ,
+.BI \-\-pin\-source " FILE" ,
+.BR \-n ,
+.BR \-\-no\-save\-cookies ,
+.BR \-V .
+Settings resolve as there: commandline, environment, env file, catalog
+settings, defaults.
+.SH EXIT STATUS
+0 on quit; 2 when standard output is not a terminal or a setting is
+invalid.
+.SH EXAMPLES
+.EX
+fermi_sso_jar_tui
+fermi_sso_jar_tui \-c ~/work/other.cookies \-a kerberos
+.EE
+.SH SEE ALSO
+.BR fermi_sso_jar (1),
+.BR fermi_sso_jar_gui (1),
+.BR fermi_sso_sites (5),
+.BR fermi_sso_cookies (1)

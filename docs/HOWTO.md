@@ -424,6 +424,54 @@ when nothing matches the filters, so `fermi-sso-cookies -q --live -D
 pingprod.fnal.gov -N PF JAR` is a cheap "do I still have an IdP session"
 test for scripts. See `man ./man/fermi_sso_cookies.1`.
 
+### Pre-priming the jar for every site you use
+
+`fermi-sso-jar` manages the jar on purpose rather than as a by-product of a
+probe run. It carries a catalog of sites (see `config/sites.yaml` and
+`man ./man/fermi_sso_sites.5`), judges from the cookie expiries which sites
+the jar still covers, and logs in to the rest.
+
+```bash
+fermi-sso-jar setup            # account, method, jar path -> ~/.fermi_sso.env (mode 600)
+fermi-sso-jar prime --all      # one login per IdP connection; the password is asked once
+fermi-sso-jar                  # the status table
+```
+
+```
+SITE           STATE    COOKIES  EXPIRES                      CONNECTION  NAME
+idp            session  2        session cookies only         -           identity provider (pingprod.fnal.gov)
+docdb          session  1        session cookies only         saml        Mu2e DocDB
+mu2e-shifts    live     2        in 7h 58m (2026-10-30 23:10) oidc        Mu2e shift scheduler
+mu2e-talks     absent   0        no cookies                   oidc        Mu2eTalks
+```
+
+Most SSO cookies are session cookies, so the file cannot tell when they
+die; `fermi-sso-jar verify` asks the network, cookies only, and
+`fermi-sso-jar refresh --verify` re-logs-in whatever fails. Plain
+`refresh` acts on the absent, expired and expiring-soon states only and
+prints nothing when there is nothing to do, which makes it safe on a
+frequent timer (`fermi-sso-jar setup --scheduler` prints a crontab,
+launchd or Task Scheduler recipe). The sign-on throttle is respected: a
+run stops at the first "Multiple Sign-On Delay" page.
+
+In code, `fermi_sso_jar.open_session("docdb")` returns a cookies-only
+session, priming the jar first when it must and raising `RuntimeError`
+when it cannot. The password never reaches the returned session.
+
+Adding a site is one line, and the entry can be verified at once through
+the identity-provider session the jar already holds:
+
+```bash
+fermi-sso-jar sites add my-app "https://my-app.fnal.gov/login/oidc?next=/" -x Dashboard --connection oidc --test
+fermi-sso-jar sites show my-app
+```
+
+`fermi-sso-jar-tui` and `fermi-sso-jar-gui` are the same engine behind a
+curses screen and a Qt window: the site table with colours per state, the
+selected site's cookies, and keys or buttons for prime, refresh, verify,
+clear, purge, add-site and setup. Both poll the jar file, so a login made
+by a script appears without a keypress.
+
 ### One jar, several sites
 
 The identity provider's own session cookie is saved alongside the site

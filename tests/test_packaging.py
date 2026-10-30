@@ -82,7 +82,11 @@ def test_the_library_module_exposes_a_version():
 
 def test_every_module_reports_the_same_version():
     import fermi_sso_cookies
+    import fermi_sso_jar
+    import fermi_sso_jar_gui
+    import fermi_sso_jar_tui
     import fermi_sso_probe
+    import fermi_sso_sites
     import fermi_sso_yubikey
     import requests_fermi_sso
 
@@ -93,6 +97,10 @@ def test_every_module_reports_the_same_version():
             fermi_sso_probe,
             fermi_sso_yubikey,
             fermi_sso_cookies,
+            fermi_sso_sites,
+            fermi_sso_jar,
+            fermi_sso_jar_tui,
+            fermi_sso_jar_gui,
         )
     }
     assert len(set(versions.values())) == 1, versions

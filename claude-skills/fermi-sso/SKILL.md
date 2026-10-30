@@ -1,6 +1,6 @@
 ---
 name: fermi-sso
-description: Log in to Fermilab SSO (pingprod.fnal.gov, SAML /idp/ and OIDC /as/) from scripts using the requests-fermi_sso package and its CLIs — fermi-sso-probe (check a login, fetch a protected page), fermi-sso-cookies (inspect a cookie jar), fermi-sso-yubikey (YubiKey PIV readiness). Covers password, Kerberos, YubiKey and cookie-jar modes, reusing a browser cookies.txt export for MFA accounts, approving CILogon OIDC device-flow codes (htgettoken --headless, Vault) without a browser, and diagnosing failed logins. Use when the user wants to fetch an SSO-protected Fermilab page (DocDB, mu2e-shifts, Mu2eTalks, SCD Reporting, ServiceNow), approve a cilogon.org/device user code from a script, check whether an SSO login or saved cookie jar still works, or debug a "login failed" from this package.
+description: Log in to Fermilab SSO (pingprod.fnal.gov, SAML /idp/ and OIDC /as/) from scripts using the requests-fermi_sso package and its CLIs — fermi-sso-probe (check a login, fetch a protected page), fermi-sso-cookies (inspect a cookie jar), fermi-sso-jar and its fermi-sso-jar-tui / fermi-sso-jar-gui viewers (pre-prime one jar for a catalog of sites, show per-site session state, refresh stale sessions, add sites, set up the env file and a refresh timer), fermi-sso-yubikey (YubiKey PIV readiness). Covers password, Kerberos, YubiKey and cookie-jar modes, reusing a browser cookies.txt export for MFA accounts, approving CILogon OIDC device-flow codes (htgettoken --headless, Vault) without a browser, and diagnosing failed logins. Use when the user wants to fetch an SSO-protected Fermilab page (DocDB, mu2e-shifts, Mu2eTalks, SCD Reporting, ServiceNow), approve a cilogon.org/device user code from a script, check whether an SSO login or saved cookie jar still works, or debug a "login failed" from this package.
 ---
 
 Source and docs: `$FERMI_SSO_HOME` (default
@@ -109,6 +109,40 @@ r.ok, r.reasons, r.response
   OIDC only runs when the cached vault token and Kerberos-to-Vault
   logins fail, so force it with `--nokerberos --nossh
   --vaulttokeninfile /nonexistent` when testing.
+
+## fermi-sso-jar (pre-primed jar for many sites)
+
+Prefer this over hand-driving the probe when the user wants "log in once,
+reuse everywhere" or asks whether their saved sessions are still good.
+Man pages: `fermi_sso_jar(1)`, `fermi_sso_sites(5)`.
+
+```bash
+fermi-sso-jar                          # status table: idp + each catalog site, state per site
+fermi-sso-jar -j                       # same as JSON (sites[].state, sites[].stale, unclaimed[])
+fermi-sso-jar prime --all              # log in where needed; asks for the password once (terminal)
+fermi-sso-jar refresh -n -q            # re-login only absent/expired/soon sites; silent when nothing to do
+fermi-sso-jar refresh --verify -n      # also network-check session-only sites
+fermi-sso-jar verify SITE              # cookies-only check of one site
+fermi-sso-jar clear SITE [--idp]       # drop a site's (and the IdP's) cookies
+fermi-sso-jar sites list|show KEY      # the catalog
+fermi-sso-jar sites add KEY URL -x TEXT --connection oidc|saml [--js-redirect] [--test]
+fermi-sso-jar setup [--scheduler]      # write ~/.fermi_sso.env, print shell + cron/launchd/schtasks lines
+```
+
+States: `live` (expiry beyond the margin), `soon`, `session` (session
+cookies only: the file cannot know, `verify` can), `expired`, `absent`.
+Exit 0 ok, 1 a site failed or is stale without a credential, 2 usage.
+Settings: CLI > env > env file > catalog `settings:` > defaults. Catalog:
+built-ins + `~/.fermi_sso/sites.yaml` + `$FERMI_SSO_SITES_FILE` +
+`-S FILE`; later files override by key; `enabled: false` hides.
+
+Python: `fermi_sso_jar.open_session("docdb")` returns a cookies-only
+`FermiSSOSession`, priming first if needed, `RuntimeError` if it cannot.
+`JarManager(jar, catalog).status()/prime()/verify()/prime_many()/clear()`.
+
+Viewers with identical capabilities: `fermi-sso-jar-tui` (curses; needs
+a real terminal, suggest `! fermi-sso-jar-tui`) and `fermi-sso-jar-gui`
+(PySide6/PyQt6, `pip install '.[gui]'`). Both poll the jar file.
 
 ## fermi-sso-cookies (offline)
 

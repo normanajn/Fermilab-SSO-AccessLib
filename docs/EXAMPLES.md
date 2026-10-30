@@ -200,3 +200,42 @@ if not result.ok:
 
 A wrong or expired code is reported as
 `CILogon reported: Error: User code not found.`
+
+## 12. One pre-primed jar for every site (fermi-sso-jar)
+
+Set up once, log in once per IdP connection, and let scripts load the jar.
+Offline-tested against the scripted identity provider on 2026-10-30; the
+site URLs are the ones verified live in §1 to §5.
+
+```bash
+fermi-sso-jar setup --scheduler          # ~/.fermi_sso.env, shell lines, a refresh timer recipe
+fermi-sso-jar prime --all                # prompts for the password once; OIDC sites ride the first login
+fermi-sso-jar                            # per-site state: live / soon / session / expired / absent
+fermi-sso-jar verify                     # cookies-only network check of every site
+fermi-sso-jar refresh -n -q              # for cron: re-login only what is stale, silent otherwise
+fermi-sso-jar status --stale -q || fermi-sso-jar refresh -n -q   # the same, by exit status
+```
+
+```python
+import fermi_sso_jar
+
+s = fermi_sso_jar.open_session("mu2e-shifts")          # ready, or RuntimeError
+r = s.get("https://mu2e-shifts.fnal.gov/calendar")
+
+mgr = fermi_sso_jar.JarManager()                        # the engine, for finer control
+for st in mgr.status():
+    print(st.key, st.state, st.expiry_text)
+result = mgr.prime("docdb", fermi_sso_jar.Credential("kerberos"))
+print(result.ok, result.reasons)
+```
+
+Adding a site that is not in the built-in catalog, and testing it through
+the IdP session the jar already has:
+
+```bash
+fermi-sso-jar sites add scd-dash "https://scd-dash.fnal.gov/accounts/oidc/keycloak/login/?next=%2F" \
+    -x Dashboard --connection oidc --test
+```
+
+Interactively: `fermi-sso-jar-tui` in a terminal (`?` for the keys), or
+`fermi-sso-jar-gui` with PySide6 installed.

@@ -30,6 +30,10 @@ setup(
         "fermi_sso_probe",
         "fermi_sso_yubikey",
         "fermi_sso_cookies",
+        "fermi_sso_sites",
+        "fermi_sso_jar",
+        "fermi_sso_jar_tui",
+        "fermi_sso_jar_gui",
     ],
     version=read_version(),
     long_description=long_description,
@@ -51,13 +55,24 @@ setup(
     # requests_fermi_sso.py is 3.8+, so anything lower does not merely lack
     # features, it fails at import.
     python_requires=">=3.9",
-    install_requires=["requests"],
-    extras_require={"test": ["pytest"], "kerberos": ["requests-gssapi"]},
+    # PyYAML reads the site catalog files; the catalog also accepts JSON, so
+    # the jar tools degrade rather than fail without it, but it is cheap and
+    # the documented format is YAML.
+    install_requires=["requests", "PyYAML"],
+    extras_require={
+        "test": ["pytest", "pytest-qt"],
+        "kerberos": ["requests-gssapi"],
+        # the Qt viewer; PyQt6 is accepted too if already installed
+        "gui": ["PySide6"],
+    },
     entry_points={
         "console_scripts": [
             "fermi-sso-probe=fermi_sso_probe:main",
             "fermi-sso-yubikey=fermi_sso_yubikey:main",
             "fermi-sso-cookies=fermi_sso_cookies:main",
+            "fermi-sso-jar=fermi_sso_jar:main",
+            "fermi-sso-jar-tui=fermi_sso_jar_tui:main",
+            "fermi-sso-jar-gui=fermi_sso_jar_gui:main",
         ],
     },
     data_files=[
@@ -66,10 +81,15 @@ setup(
             [
                 "man/fermi_sso_probe.1",
                 "man/fermi_sso_cookies.1",
+                "man/fermi_sso_jar.1",
+                "man/fermi_sso_jar_tui.1",
+                "man/fermi_sso_jar_gui.1",
                 "man/bootstrap.sh.1",
                 "man/install-claude-skills.sh.1",
             ],
         ),
         ("share/man/man3", ["man/FermiSSOSession.3", "man/fermi_sso_yubikey.3"]),
+        ("share/man/man5", ["man/fermi_sso_sites.5"]),
+        ("share/fermi-sso/config", ["config/sites.yaml"]),
     ],
 )

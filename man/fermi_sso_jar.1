@@ -1,0 +1,383 @@
+.TH FERMI_SSO_JAR 1 "2026-10-30" "requests-fermi-sso 0.4.0" "User Commands"
+.SH NAME
+fermi_sso_jar \- pre\-prime and maintain a cookie jar of Fermilab SSO sessions
+.SH SYNOPSIS
+.B fermi_sso_jar
+.RI [ COMMON\ OPTIONS ]
+.RB [ status ]
+.RI [ SITE ...]
+.br
+.B fermi_sso_jar prime
+.RI [ CREDENTIAL\ OPTIONS ]
+.RI [ SITE "...|" \-\-all ]
+.br
+.B fermi_sso_jar refresh
+.RI [ CREDENTIAL\ OPTIONS ]
+.RB [ \-\-verify ]
+.RI [ SITE ...]
+.br
+.B fermi_sso_jar verify
+.RI [ SITE ...]
+.br
+.B fermi_sso_jar clear
+.RI [ SITE "...] [" \-\-idp "] [" \-\-expired "] [" \-\-all ]
+.br
+.B fermi_sso_jar sites
+.RB [ list | show | add | remove ]
+.RI [ ... ]
+.br
+.B fermi_sso_jar setup
+.RI [ OPTIONS ]
+.SH DESCRIPTION
+.B fermi_sso_jar
+keeps one cookie jar holding live sessions for every site in a catalog of
+SSO\-protected Fermilab services, so that scripts can load the jar and
+reach the sites without logging in. Log in to each site once, with
+whatever credential works for it, and every later process reuses the
+result until the sessions expire; then
+.B refresh
+performs only the logins that are needed.
+.PP
+The same engine drives two interactive viewers,
+.BR fermi_sso_jar_tui (1)
+(curses) and
+.BR fermi_sso_jar_gui (1)
+(Qt), with the same capabilities, and is importable from Python as
+.BR fermi_sso_jar.open_session() .
+.PP
+The catalog of sites is described in
+.BR fermi_sso_sites (5).
+It ships with the services this package has been run against (Mu2e DocDB,
+the Mu2e shift scheduler, Mu2eTalks, SCD Reporting, ServiceNow) and is
+extended by writing entries to
+.I ~/.fermi_sso/sites.yaml
+with
+.BR "sites add" .
+.SS Site states
+Each site is judged offline from the cookies in the jar:
+.TP
+.B live
+the site's cookies are present with an expiry further away than the margin
+.TP
+.B soon
+present but within the margin of expiring (default 30 minutes)
+.TP
+.B session
+present, but only session cookies, whose lifetime the file does not
+record. The SSO flow issues mostly these. Use
+.B verify
+to check them against the network.
+.TP
+.B expired
+present but past their expiry
+.TP
+.B absent
+the jar holds nothing for the site
+.PP
+The identity provider's own cookies appear as the pseudo\-site
+.BR idp .
+One identity\-provider session per PingFederate connection (SAML or OIDC)
+signs in every site on that connection with no login form, so priming the
+first site on a connection is the only login the others need.
+.SH COMMANDS
+.TP
+.BR status " [" SITE "...]"
+The default. One line per site with its state, cookie count, time to
+expiry and connection. Exit 0.
+.RS
+.TP
+.BR \-j ", " \-\-json
+Machine\-readable: the jar path, the per\-site records with a
+.B stale
+flag, and cookies belonging to no catalog site.
+.TP
+.B \-\-cookies
+Also list the individual cookies, grouped by site.
+.TP
+.B \-\-stale
+Exit 1 if any site is absent, expired or expiring soon, for scripts that
+decide whether to refresh.
+.TP
+.BR \-q ", " \-\-quiet
+Only the table.
+.TP
+.B \-\-utc
+UTC timestamps.
+.RE
+.TP
+.BR prime " [" SITE "...|" \-\-all ]
+Fetch each site's SSO entry URL through a session loaded from the jar. If
+the cookies do not sign in, log in with the credential and save the jar.
+Sites are primed in sequence through one jar so the identity\-provider
+session from the first login carries the rest. A password is asked for
+only when the jar fails and only once per run. Stops when the identity
+provider starts throttling sign\-ons. Exit 0 when every site ended signed
+in, 1 otherwise.
+.TP
+.BR refresh " [" \-\-verify "] [" SITE "...]"
+Like
+.B prime
+restricted to the sites whose state is absent, expired or soon. With
+.B \-\-verify
+the sites holding only session cookies are also checked against the
+network, and those that no longer sign in are re\-logged\-in. Prints
+nothing with
+.B \-q
+when nothing was stale, so it suits a frequent timer. Exit 0 when nothing
+was stale or every refresh succeeded; 1 when something is stale and no
+credential is available, or a login failed.
+.TP
+.BR verify " [" SITE "...]"
+Cookies only, no credential: does the jar still sign in to each site? The
+jar is saved when a site's redirect chain added cookies. Exit 0 when every
+site signed in.
+.TP
+.BR clear " [" SITE "...] [" \-\-idp "] [" \-\-expired "] [" \-\-all ]
+Remove the named sites' cookies from the jar; with
+.B \-\-idp
+the identity provider's as well (every site will then log in again), with
+.B \-\-expired
+every expired cookie, with
+.B \-\-all
+every catalog site. Cookies belonging to no catalog site are kept.
+.TP
+.BR sites " [" list "]"
+One line per catalog site;
+.B \-j
+for the full records as JSON.
+.TP
+.BI "sites show " SITE ...
+Every field of the named entries, with the file each came from.
+.TP
+.BI "sites add " KEY " " URL " [" OPTIONS ]
+Add or replace an entry in
+.I ~/.fermi_sso/sites.yaml
+(or
+.BI \-\-file " FILE" ).
+.I KEY
+is lowercase letters, digits, dots, underscores and dashes;
+.I URL
+is the site's SSO entry URL (https). Options:
+.BI \-\-name " LABEL" ,
+.BI \-x " TEXT"
+(required on the signed\-in page),
+.BI \-D " DOMAIN"
+(cookie domain of the site session, repeatable; default the URL's host),
+.BR "\-\-connection saml" | oidc ,
+.BI \-\-auth " METHOD"
+(repeatable),
+.B \-\-js\-redirect
+(follow a JavaScript
+.I location=
+stub as ServiceNow serves),
+.BI \-\-notes " TEXT" ,
+and
+.B \-\-test
+to run
+.B verify
+on the new entry.
+.TP
+.BI "sites remove " KEY
+Remove a user entry. For a built\-in site an
+.B enabled: false
+stub is written instead, which hides it.
+.TP
+.B setup
+Record the account, authentication method, PIN file and jar path in the
+env file (default
+.IR ~/.fermi_sso.env ,
+mode 600), create the jar directory and an empty user catalog, and print
+the shell lines that make every tool and script find the same files.
+Interactive on a terminal unless
+.B \-\-non\-interactive
+is given. Options:
+.BI \-u " USER" ,
+.BI \-a " METHOD" ,
+.BI \-\-pin\-source " FILE" ,
+.B \-\-store\-password
+(prompt and store it in the env file),
+.BI \-\-write\-env " FILE" ,
+.BR "\-\-shell sh" | csh | tcsh | powershell ,
+.B \-\-scheduler
+(print a crontab, launchd or Task Scheduler recipe that runs
+.B refresh
+periodically),
+.BI \-\-interval " MINUTES"
+and
+.BR \-n ", " \-\-dry\-run .
+.SH COMMON OPTIONS
+Accepted by every command, before or after the command word.
+.TP
+.BI \-c " FILE" "\fR, \fP" \-\-cookie\-file " FILE"
+The jar
+.RB ( $FERMI_SSO_COOKIE_FILE ;
+default
+.IR ~/.fermi_sso.cookies ).
+.TP
+.BI \-\-cookie\-format " FORMAT"
+.BR netscape ", " lwp " or " json
+.RB ( $FERMI_SSO_COOKIE_FORMAT ;
+default: detect).
+.TP
+.BI \-e " FILE" "\fR, \fP" \-\-env\-file " FILE"
+Settings file (default
+.I ./.env
+then
+.IR ~/.fermi_sso.env ).
+.TP
+.B \-\-no\-env\-file
+Ignore env files.
+.TP
+.BI \-S " FILE" "\fR, \fP" \-\-sites\-file " FILE"
+Extra catalog file, merged after the user file and
+.BR $FERMI_SSO_SITES_FILE .
+Repeatable.
+.TP
+.B \-\-no\-builtin\-sites
+Start from an empty catalog.
+.TP
+.BI \-\-margin " SECONDS"
+Cookies expiring within
+.I SECONDS
+count as stale
+.RB ( $FERMI_SSO_REFRESH_MARGIN ;
+default 1800).
+.TP
+.BI \-\-idp\-host " HOST"
+Identity provider host
+.RB ( $FERMI_SSO_IDP_HOST ;
+default
+.BR pingprod.fnal.gov ).
+.TP
+.BR \-d ", " \-\-debug
+Wire\-level logging
+.RB ( $FERMI_SSO_DEBUG=1 ).
+.SH CREDENTIAL OPTIONS
+For
+.BR prime " and " refresh .
+.TP
+.BI \-u " USER" "\fR, \fP" \-\-user " USER"
+Account
+.RB ( $FERMI_USER ,
+then
+.BR $USER ).
+.TP
+.BI \-\-password\-env " NAME"
+Read the password from
+.BI $ NAME
+(default
+.BR $FERMI_PASSWORD ).
+.BI \-p " PASSWORD"
+is accepted but visible in
+.BR ps (1).
+.TP
+.BI \-a " METHOD" "\fR, \fP" \-\-auth " METHOD"
+.BR password " (default), " kerberos " or " yubikey
+.RB ( $FERMI_SSO_AUTH ).
+Kerberos needs a FERMI.WIN.FNAL.GOV ticket; the YubiKey works on the OIDC
+connection only.
+.TP
+.BI \-\-pin\-source " FILE"
+YubiKey PIV PIN file
+.RB ( $FERMI_SSO_PIN_SOURCE ).
+.TP
+.BR \-n ", " \-\-no\-prompt
+Never prompt for a password.
+.TP
+.B \-\-no\-save\-cookies
+Load the jar but never rewrite it.
+.SH PRECEDENCE
+Settings resolve as: commandline options, then environment variables,
+then the env file, then the
+.B settings
+block of the catalog files
+.RB ( cookie_file ", " margin ", " idp_host ", " user ", " auth ", " pin_source ),
+then built\-in defaults.
+.SH PYTHON
+.EX
+import fermi_sso_jar
+s = fermi_sso_jar.open_session("mu2e-talks")   # primes the jar if it must
+r = s.get("https://mu2e-talks.fnal.gov/api/talks/")
+.EE
+.PP
+.B open_session(site, jar=None, credential=None, ensure=True)
+returns a cookies\-only
+.B FermiSSOSession
+loaded from the jar. With
+.I site
+the site's entry URL is fetched first; if the jar does not sign in and the
+credential (default: resolved from the environment and env file exactly as
+the tools do) can log in, the login is performed and the jar saved; else
+.B RuntimeError
+is raised.
+.B JarManager
+exposes
+.BR status() ", " prime() ", " verify() ", " prime_many() ", " clear() ", " purge_expired() .
+.SH ENVIRONMENT
+.BR FERMI_SSO_COOKIE_FILE ", " FERMI_SSO_COOKIE_FORMAT ", " FERMI_SSO_ENV_FILE ", "
+.BR FERMI_SSO_SITES_FILE ", " FERMI_SSO_REFRESH_MARGIN ", " FERMI_SSO_IDP_HOST ", "
+.BR FERMI_USER ", " FERMI_PASSWORD ", " FERMI_SSO_AUTH ", " FERMI_SSO_PIN_SOURCE ", " FERMI_SSO_DEBUG .
+See
+.I env.example
+in the source tree.
+.SH FILES
+.TP
+.I ~/.fermi_sso.cookies
+The jar; mode 600, a bearer credential.
+.TP
+.I ~/.fermi_sso.env
+Settings, written by
+.BR setup .
+.TP
+.I ~/.fermi_sso/sites.yaml
+User site catalog, written by
+.BR "sites add" .
+.TP
+.I config/sites.yaml
+The built\-in catalog in file form, with the schema documented.
+.SH EXIT STATUS
+0 success (every site signed in, or nothing to do); 1 a site failed to sign
+in or is stale without a credential; 2 usage or configuration error.
+.SH EXAMPLES
+First time: record the account and jar, then log in everywhere once:
+.PP
+.RS
+.EX
+fermi_sso_jar setup
+fermi_sso_jar prime \-\-all           # prompts for the password once
+fermi_sso_jar                        # status table
+.EE
+.RE
+.PP
+From a timer, with the password in the mode\-600 env file:
+.PP
+.RS
+.EX
+*/30 * * * * fermi\-sso\-jar refresh \-n \-q \-e ~/.fermi_sso.env
+.EE
+.RE
+.PP
+Add a site and check it signs in through the existing IdP session:
+.PP
+.RS
+.EX
+fermi_sso_jar sites add my\-app "https://my\-app.fnal.gov/login/oidc?next=/" \-x Dashboard \-\-connection oidc \-\-test
+.EE
+.RE
+.PP
+A script that wants a ready session:
+.PP
+.RS
+.EX
+import fermi_sso_jar
+s = fermi_sso_jar.open_session("docdb")
+print(s.get("https://mu2e-docdb.fnal.gov/cgi-bin/DocDB/ListBy?days=7").status_code)
+.EE
+.RE
+.SH SEE ALSO
+.BR fermi_sso_jar_tui (1),
+.BR fermi_sso_jar_gui (1),
+.BR fermi_sso_sites (5),
+.BR fermi_sso_probe (1),
+.BR fermi_sso_cookies (1),
+.BR FermiSSOSession (3)

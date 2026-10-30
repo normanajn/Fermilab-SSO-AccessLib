@@ -40,6 +40,10 @@ def test_every_console_script_has_a_man_page():
         "fermi_sso_probe": "man/fermi_sso_probe.1",
         "fermi_sso_cookies": "man/fermi_sso_cookies.1",
         "fermi_sso_yubikey": "man/fermi_sso_yubikey.3",
+        "fermi_sso_jar": "man/fermi_sso_jar.1",
+        "fermi_sso_jar_tui": "man/fermi_sso_jar_tui.1",
+        "fermi_sso_jar_gui": "man/fermi_sso_jar_gui.1",
+        "fermi_sso_sites": "man/fermi_sso_sites.5",
     }
     missing = [p for p in scripts.values() if not os.path.exists(os.path.join(ROOT, p))]
     assert missing == []

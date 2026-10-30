@@ -49,3 +49,5 @@ echo
 echo "done. activate with:  . $venv/bin/activate"
 echo "then try:             fermi-sso-probe -u \$USER"
 echo "inspect a jar with:   fermi-sso-cookies ~/.fermi_sso.cookies"
+echo "prime every site:     fermi-sso-jar setup && fermi-sso-jar prime --all"
+echo "watch the jar:        fermi-sso-jar-tui   (or fermi-sso-jar-gui with PySide6)"
