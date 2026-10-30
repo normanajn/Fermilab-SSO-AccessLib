@@ -1,0 +1,90 @@
+# Site catalog for the fermi-sso-jar tools.
+#
+# This file is the built-in catalog in file form and the reference for the
+# schema. The tools do not read it from here: they merge, in order,
+#
+#     the built-in entries (identical to the ones below)
+#     ~/.fermi_sso/sites.yaml                  written by: fermi-sso-jar sites add
+#     the files named in $FERMI_SSO_SITES_FILE (colon separated)
+#     any --sites-file FILE options
+#
+# A later file overrides an earlier entry with the same key field by field,
+# and `enabled: false` hides one. Copy an entry to ~/.fermi_sso/sites.yaml
+# to change it, or add new sites there. JSON is accepted in place of YAML.
+#
+# Entry fields:
+#   name        human label (default: the key)
+#   url         the site's SSO entry URL; required, https only. Use the URL
+#               that starts the login, not the site root: roots are usually
+#               unprotected landing pages or local login menus.
+#   expect      text that must appear on the final page for a login to count
+#   domains     cookie domains that make up the site's own session
+#               (default: the host of url). Subdomains match.
+#   connection  saml | oidc. Sites on the same PingFederate connection share
+#               one identity-provider session in the jar.
+#   auth        authentication methods known to work: password, kerberos,
+#               yubikey (default: all three)
+#   js_redirect true when protected pages answer with a JavaScript
+#               `location = ...` stub the tools must follow (ServiceNow)
+#   notes       free text shown by `fermi-sso-jar sites show`
+#   enabled     false hides the entry
+#
+# The optional settings block supplies defaults below the .env file in the
+# precedence order (commandline > environment > .env > settings > built-in):
+#
+# settings:
+#   cookie_file: ~/.fermi_sso.cookies
+#   margin: 1800            # seconds; cookies expiring sooner are "soon"
+#   idp_host: pingprod.fnal.gov
+#   user: myaccount
+#   auth: password
+
+sites:
+  docdb:
+    name: Mu2e DocDB
+    url: https://mu2e-docdb.fnal.gov/cgi-bin/sso/DocumentDatabase
+    expect: Document
+    domains: [mu2e-docdb.fnal.gov]
+    connection: saml
+    auth: [password, kerberos]
+    notes: >-
+      The site root is unprotected; only the /cgi-bin/sso/ entry point
+      exercises the login. The SAML connection does not offer the YubiKey
+      adapter.
+
+  mu2e-shifts:
+    name: Mu2e shift scheduler
+    url: https://mu2e-shifts.fnal.gov/login/oidc?next=/
+    expect: Calendar
+    domains: [mu2e-shifts.fnal.gov]
+    connection: oidc
+    notes: The root is a local login menu; use the /login/oidc entry.
+
+  mu2e-talks:
+    name: Mu2eTalks
+    url: https://mu2e-talks.fnal.gov/accounts/oidc/keycloak/login/?next=%2F
+    expect: Dashboard
+    domains: [mu2e-talks.fnal.gov]
+    connection: oidc
+    notes: >-
+      django-allauth confirmation page in front of the IdP; the library
+      submits it.
+
+  scd-reporting:
+    name: SCD Reporting
+    url: https://scd-reporting.fnal.gov/accounts/oidc/keycloak/login/?next=%2F
+    expect: Dashboard
+    domains: [scd-reporting.fnal.gov]
+    connection: oidc
+    notes: django-allauth, as Mu2eTalks.
+
+  servicenow:
+    name: Fermilab ServiceNow
+    url: https://fermi.servicenowservices.com/navpage.do
+    domains: [fermi.servicenowservices.com]
+    connection: saml
+    auth: [password, kerberos]
+    js_redirect: true
+    notes: >-
+      Protected pages redirect to auth_redirect.do, a JavaScript jump to the
+      IdP; js_redirect makes the jar tools follow it.

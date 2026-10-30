@@ -32,6 +32,24 @@ Python >= 3.9. Runtime dependency is `requests` only. The `kerberos` extra
 adds `requests-gssapi`. YubiKey mode needs OpenSSL 3, libp11, and a
 PKCS#11 module at the system level (`docs/DEPENDENCIES.md`).
 
+## Shortest path: a pre-primed jar
+
+When the host just needs a working session and the user maintains a jar
+with `fermi-sso-jar` (0.4.0+), skip credential plumbing entirely:
+
+```python
+import fermi_sso_jar
+s = fermi_sso_jar.open_session("mu2e-talks")   # key from `fermi-sso-jar sites list`
+```
+
+It loads `~/.fermi_sso.cookies` (or `$FERMI_SSO_COOKIE_FILE`), fetches the
+site's SSO entry URL, logs in with the environment/env-file credential only
+if the cookies fail, saves the jar, and returns a cookies-only session. It
+raises `RuntimeError` when it cannot sign in; let that propagate or map it
+to the host's error path. Sites not in the catalog: `fermi-sso-jar sites
+add KEY URL -x TEXT`, or ship a project catalog and point
+`$FERMI_SSO_SITES_FILE` at it (`man fermi_sso_sites.5`).
+
 ## API in one screen
 
 ```python

@@ -18,7 +18,9 @@ pip install '.[kerberos]'    # adds requests-gssapi for --auth kerberos
 The YubiKey mode needs system tools (OpenSSL 3, the pkcs11 engine, a PKCS#11
 module); see [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md).
 
-This also installs the `fermi-sso-probe` and `fermi-sso-cookies` commands. For development:
+This also installs the `fermi-sso-probe`, `fermi-sso-cookies`, `fermi-sso-jar`
+and `fermi-sso-jar-tui` commands; `pip install '.[gui]'` adds PySide6 for
+`fermi-sso-jar-gui`. For development:
 
 ```
 ./bootstrap.sh          # creates venv/, installs with test extras, runs tests
@@ -156,6 +158,43 @@ fermi-sso-cookies ~/.fermi_sso.cookies
 fermi-sso-cookies -D pingprod.fnal.gov -l ~/.fermi_sso.cookies   # is the IdP session still live?
 ```
 
+### Pre-priming one jar for every site
+
+`fermi-sso-jar` turns the jar into a maintained thing rather than a side
+effect of one probe run. It knows a catalog of sites (DocDB, the shift
+scheduler, Mu2eTalks, SCD Reporting, ServiceNow, plus whatever you add),
+reports per site whether the jar still holds a session, logs in to the
+ones that need it, and refreshes only what is stale. Do the setup once:
+
+```
+fermi-sso-jar setup                 # records account, method and jar path in ~/.fermi_sso.env
+fermi-sso-jar prime --all           # logs in everywhere once, asking for the password once
+fermi-sso-jar                       # status: live / soon / session / expired / absent per site
+fermi-sso-jar refresh -n -q         # from cron or launchd: re-login only when something is stale
+fermi-sso-jar verify mu2e-talks     # cookies-only network check of one site
+```
+
+Scripts then need no credentials at all:
+
+```python
+import fermi_sso_jar
+s = fermi_sso_jar.open_session("mu2e-talks")      # primes the jar first if it has to
+r = s.get("https://mu2e-talks.fnal.gov/api/talks/")
+```
+
+New sites go into `~/.fermi_sso/sites.yaml` with the key, the SSO entry
+URL and optionally the text expected on the signed-in page:
+
+```
+fermi-sso-jar sites add my-app "https://my-app.fnal.gov/login/oidc?next=/" -x Dashboard --connection oidc --test
+```
+
+The same engine has two interactive front ends with the same capabilities:
+`fermi-sso-jar-tui` (curses, colours per state, keys to prime/refresh/verify/
+clear) and `fermi-sso-jar-gui` (Qt, with Add-site and Setup dialogs). Both
+re-read the jar every few seconds, so a login made elsewhere shows up on
+its own. See `man ./man/fermi_sso_jar.1` and `man ./man/fermi_sso_sites.5`.
+
 ### Claude Code skills
 
 `claude-skills/` holds two Claude Code skills: `fermi-sso` (running the
@@ -181,7 +220,11 @@ See `man ./man/install-claude-skills.sh.1`.
 - `man ./man/install-claude-skills.sh.1` — the Claude Code skills installer
 - `man ./man/fermi_sso_probe.1` — the probe utility
 - `man ./man/fermi_sso_cookies.1` — the cookie jar inspector
+- `man ./man/fermi_sso_jar.1` — the jar manager: status, prime, refresh, verify, clear, sites, setup
+- `man ./man/fermi_sso_jar_tui.1`, `man ./man/fermi_sso_jar_gui.1` — the terminal and Qt viewers
+- `man ./man/fermi_sso_sites.5` — the site catalog file format
 - `man ./man/FermiSSOSession.3` — the library API
+- [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) — design decisions, phase status, test and compatibility matrices
 
 ### Tests
 

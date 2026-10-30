@@ -2,4 +2,6 @@
 # Install with: pip install -r requirements-dev.txt
 -r requirements.txt
 pytest
+pytest-qt           # tests/test_jar_gui.py; skipped without it
+PySide6             # the Qt viewer under test; skipped without it
 trove-classifiers   # validates setup.py classifiers in tests/test_packaging.py

@@ -1,3 +1,7 @@
 # Runtime dependencies for requests-fermi-sso.
 # Install with: pip install -r requirements.txt
 requests
+PyYAML          # site catalog files for fermi-sso-jar (config/sites.yaml, ~/.fermi_sso/sites.yaml)
+
+# Optional: the Qt cookie-jar viewer (fermi-sso-jar-gui). PyQt6 works too.
+# pip install PySide6   or   pip install ".[gui]"

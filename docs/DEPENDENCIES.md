@@ -12,7 +12,9 @@ what it needs.
 | Password login, cookie reuse, allauth and SAML/OIDC handling, the probe | `requests` | none | macOS 26 / Python 3.12 (live); Python 3.9 by inspection |
 | Kerberos (`auth_method="kerberos"`, `--auth kerberos`) | `requests-gssapi`, which pulls in `gssapi` | a Kerberos client with a ticket cache: macOS built-in Heimdal; MIT krb5 on Linux (`krb5-user` / `krb5-workstation`); `gssapi` needs krb5 headers only where no wheel exists | code path offline only; live blocked by the FERMI.WIN.FNAL.GOV KDC for this account |
 | YubiKey PIV certificate (`auth_method="yubikey"`, `--auth yubikey`) | none beyond `requests` | OpenSSL 3 with engine support, the libp11 `pkcs11` engine, a PKCS#11 module for the token (libykcs11 or opensc-pkcs11), `pkcs11-tool`; `ykman` optional for inspection | macOS 26 (live, 2026-09-02) |
-| Development | `pytest`, `black` | `mandoc` or `man` to render the manpages | macOS |
+| Jar manager and terminal viewer (`fermi-sso-jar`, `fermi-sso-jar-tui`) | `PyYAML` for the site catalog (JSON catalogs work without it); `curses` from the stdlib (on Windows: `windows-curses`) | none | macOS 26 / Python 3.12 (offline tests) |
+| Qt viewer (`fermi-sso-jar-gui`) | `PySide6` (or an already-installed `PyQt6`) | a display; `QT_QPA_PLATFORM=offscreen` for headless tests | macOS 26 / PySide6 6.12 (offscreen) |
+| Development | `pytest`, `pytest-qt`, `black` | `mandoc` or `man` to render the manpages | macOS |
 
 Python 3.9 is the floor for the code. `gssapi` wheels exist for current
 macOS and manylinux; on other platforms it compiles against the krb5 headers.
@@ -20,9 +22,10 @@ macOS and manylinux; on other platforms it compiles against the krb5 headers.
 ## Python packages
 
 ```bash
-pip install .                 # requests only
+pip install .                 # requests, PyYAML
 pip install '.[kerberos]'     # + requests-gssapi (+ gssapi)
-pip install '.[test]'         # + pytest
+pip install '.[gui]'          # + PySide6, for fermi-sso-jar-gui
+pip install '.[test]'         # + pytest, pytest-qt
 ```
 
 `requests-gssapi` is imported lazily, only when a session is constructed

@@ -12,7 +12,7 @@ from html.parser import HTMLParser
 from typing import Dict, Iterable, List, NamedTuple, Optional, Tuple
 from urllib.parse import urlencode, urljoin, urlsplit
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 logger = logging.getLogger(__name__)
 

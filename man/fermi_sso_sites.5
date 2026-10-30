@@ -1,0 +1,161 @@
+.TH FERMI_SSO_SITES 5 "2026-10-30" "requests-fermi-sso 0.4.0" "File Formats"
+.SH NAME
+fermi_sso_sites \- catalog of SSO\-protected sites for the fermi\-sso\-jar tools
+.SH SYNOPSIS
+.I ~/.fermi_sso/sites.yaml
+.br
+.B $FERMI_SSO_SITES_FILE
+.br
+.I config/sites.yaml
+(reference copy of the built\-in catalog)
+.SH DESCRIPTION
+A
+.I site
+is the handful of facts
+.BR fermi_sso_jar (1)
+and its viewers need to sign in to one service provider and to tell
+afterwards whether the jar still carries its session. The catalog is
+built by merging, in order:
+.IP 1. 4
+the built\-in entries (Mu2e DocDB, the Mu2e shift scheduler, Mu2eTalks,
+SCD Reporting, Fermilab ServiceNow), identical to
+.IR config/sites.yaml ;
+.IP 2. 4
+.IR ~/.fermi_sso/sites.yaml ,
+the user catalog that
+.B fermi_sso_jar sites add
+writes;
+.IP 3. 4
+the files named in
+.BR $FERMI_SSO_SITES_FILE ,
+colon separated (semicolon on Windows);
+.IP 4. 4
+any
+.BI "\-\-sites\-file " FILE
+options.
+.PP
+A later file overrides an earlier entry with the same key field by field,
+so a user file may change only
+.B expect
+for a built\-in site and keep the rest. An entry of
+.B enabled: false
+(or a null entry) hides a site; a still later file may re\-enable it.
+Missing files from steps 2 and 3 are skipped; a missing
+.B \-\-sites\-file
+is an error.
+.PP
+Files are YAML and need PyYAML. A file whose first character is
+.B {
+is read as JSON with the standard library instead.
+.SH FORMAT
+.EX
+settings:                       # optional, all keys optional
+  cookie_file: ~/.fermi_sso.cookies
+  margin: 1800                  # seconds; sooner expiry counts as stale
+  idp_host: pingprod.fnal.gov
+  user: myaccount
+  auth: password                # password | kerberos | yubikey
+  pin_source: ~/.fermi_sso.pin
+
+sites:
+  KEY:
+    name: Human label           # default: the key
+    url: https://host/sso/entry # required; https only
+    expect: Dashboard           # text required on the signed-in page
+    domains: [host.fnal.gov]    # cookie domains of the site session;
+                                # default: the host of url. Subdomains match.
+    connection: oidc            # saml | oidc; default unknown
+    auth: [password, kerberos]  # methods known to work; default all
+    js_redirect: false          # follow a JavaScript location= stub
+    notes: free text
+    enabled: true
+.EE
+.PP
+.I KEY
+is lowercase letters, digits, dots, underscores and dashes, starting with
+a letter or digit. Unknown fields are rejected, so a typo cannot silently
+disable a check.
+.PP
+The
+.B settings
+block sits between the env file and the built\-in defaults in the tools'
+precedence order: commandline, environment, env file, settings, defaults.
+.SS Choosing the url
+Use the URL that starts the login, not the site root. Site roots are
+usually unprotected landing pages (DocDB) or local login menus (the shift
+scheduler, allauth applications), and a login that never happens cannot
+be verified. Known shapes:
+.TP
+DocDB (SAML)
+.I https://mu2e\-docdb.fnal.gov/cgi\-bin/sso/DocumentDatabase
+.TP
+Flask/OIDC applications
+.I https://mu2e\-shifts.fnal.gov/login/oidc?next=/
+.TP
+django\-allauth applications
+.I https://mu2e\-talks.fnal.gov/accounts/oidc/keycloak/login/?next=%2F
+.TP
+ServiceNow
+.I https://fermi.servicenowservices.com/navpage.do
+with
+.BR "js_redirect: true" ,
+because protected pages answer with a page whose only content is a
+JavaScript jump to the identity provider.
+.SS connection
+PingFederate runs two connections that do not share a login. Sites on the
+same connection share one identity\-provider session in the jar: priming
+any one of them signs the rest in through a bare redirect chain. The
+value is informational for the tools today and is shown in the status
+table so that the first login per connection is predictable.
+.SS auth
+The SAML connection does not offer the YubiKey adapter, so DocDB and
+ServiceNow list
+.BR "[password, kerberos]" .
+The tools do not refuse a method that is not listed; the list documents
+what has been seen to work.
+.SH EXAMPLES
+A user file that adds a site and narrows a built\-in one:
+.PP
+.RS
+.EX
+sites:
+  my\-app:
+    url: https://my\-app.fnal.gov/login/oidc?next=/
+    expect: Dashboard
+    connection: oidc
+  servicenow:
+    enabled: false
+.EE
+.RE
+.PP
+The same written by the tool:
+.PP
+.RS
+.EX
+fermi_sso_jar sites add my\-app "https://my\-app.fnal.gov/login/oidc?next=/" \-x Dashboard \-\-connection oidc
+fermi_sso_jar sites remove servicenow
+.EE
+.RE
+.PP
+A project catalog used alongside the user one:
+.PP
+.RS
+.EX
+export FERMI_SSO_SITES_FILE=~/project/config/sso\-sites.yaml
+fermi_sso_jar sites list
+.EE
+.RE
+.SH FILES
+.TP
+.I ~/.fermi_sso/sites.yaml
+User catalog, mode 600, directory mode 700.
+.TP
+.I config/sites.yaml
+In the source tree and installed under
+.IR share/fermi\-sso/config/ :
+the built\-in catalog with every field commented.
+.SH SEE ALSO
+.BR fermi_sso_jar (1),
+.BR fermi_sso_jar_tui (1),
+.BR fermi_sso_jar_gui (1),
+.BR fermi_sso_probe (1)

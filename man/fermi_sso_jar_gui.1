@@ -1,0 +1,82 @@
+.TH FERMI_SSO_JAR_GUI 1 "2026-10-30" "requests-fermi-sso 0.4.0" "User Commands"
+.SH NAME
+fermi_sso_jar_gui \- Qt viewer for the Fermilab SSO cookie jar
+.SH SYNOPSIS
+.B fermi_sso_jar_gui
+.RI [ OPTIONS ]
+.SH DESCRIPTION
+.B fermi_sso_jar_gui
+is a Qt front end to the engine behind
+.BR fermi_sso_jar (1).
+The window shows the identity provider and every catalog site with the
+state of its cookies on the left, the selected site's cookies on the
+right, a log of what has been done below, and buttons for the same
+operations the command line offers.
+.PP
+Network work runs on a worker thread and reports back through Qt
+signals; the buttons that start network work are disabled while a job
+runs. The jar file is re\-read every five seconds, so logins performed by
+other processes appear on their own.
+.PP
+Needs PySide6 (preferred) or PyQt6:
+.B pip install 'requests\-fermi_sso[gui]'
+or
+.BR "pip install PySide6" .
+.SH BUTTONS
+.TP
+.B Prime site
+Log in to the selected site if its cookies do not sign in, and save the
+jar. A password is asked for in a dialog when the configured credential
+lacks one; it is kept for this run only.
+.TP
+.B Prime all
+Prime every site through one identity\-provider session.
+.TP
+.B Refresh stale
+Prime only the sites whose cookies are absent, expired or expiring soon.
+.TP
+.B Verify site / Verify all
+Cookies\-only network check.
+.TP
+.B Clear site
+Remove the selected site's cookies from the jar, after confirmation. On
+the
+.B idp
+row, the identity provider's cookies.
+.TP
+.B Purge expired
+Drop every expired cookie.
+.TP
+.B Show values
+Show cookie values in full. They are bearer credentials.
+.TP
+.B Add site...
+A form for a new catalog entry: key, SSO entry URL, name, expected text,
+cookie domains, connection, JavaScript redirect flag and notes, written to
+.IR ~/.fermi_sso/sites.yaml ,
+optionally verified at once. See
+.BR fermi_sso_sites (5).
+.TP
+.B Setup...
+Record the account, method, PIN file and jar path in the env file (mode
+600), optionally with the password, and show the shell lines and a
+scheduler recipe for a periodic refresh.
+.TP
+.B Reload
+Re\-read the jar now.
+.SH OPTIONS
+The common and credential options of
+.BR fermi_sso_jar (1),
+with the same precedence.
+.SH EXIT STATUS
+The Qt application's exit status, or 2 when Qt is not installed or a
+setting is invalid.
+.SH EXAMPLES
+.EX
+fermi_sso_jar_gui
+fermi_sso_jar_gui \-e ~/.fermi_sso.env \-a yubikey \-\-pin\-source ~/.fermi_sso.pin
+.EE
+.SH SEE ALSO
+.BR fermi_sso_jar (1),
+.BR fermi_sso_jar_tui (1),
+.BR fermi_sso_sites (5)
