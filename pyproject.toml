@@ -1,0 +1,81 @@
+[build-system]
+# 77 is the first setuptools with PEP 639 license expressions
+# (`license = "Apache-2.0"` + `license-files`).
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# PyPI normalizes this to fermi-sso-accesslib; either spelling installs it.
+# The importable modules keep their names (requests_fermi_sso, ...).
+name = "Fermi-SSO-AccessLib"
+dynamic = ["version"]
+description = "requests Session subclass that signs scripts into Fermilab SSO (SAML/OIDC) with a password, Kerberos, a YubiKey PIV certificate, or a saved cookie jar"
+readme = "README.md"
+# 3.9 is the floor the project supports. The f"{x=}" form in
+# requests_fermi_sso.py is 3.8+, so anything lower fails at import.
+requires-python = ">=3.9"
+license = "Apache-2.0"
+license-files = ["LICENSE.txt"]
+authors = [
+    { name = "Marc Mengel", email = "mengel@fnal.gov" },
+    { name = "Andrew Norman" },
+]
+maintainers = [{ name = "Andrew Norman" }]
+keywords = ["fermilab", "sso", "saml", "oidc", "pingfederate", "kerberos", "yubikey", "piv", "cilogon", "requests"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: System :: Systems Administration :: Authentication/Directory",
+]
+dependencies = ["requests"]
+
+[project.optional-dependencies]
+kerberos = ["requests-gssapi"]
+test = ["pytest", "trove-classifiers", "tomli; python_version < '3.11'"]
+
+[project.urls]
+Homepage = "https://github.com/normanajn/Fermilab-SSO-AccessLib"
+Source = "https://github.com/normanajn/Fermilab-SSO-AccessLib"
+Issues = "https://github.com/normanajn/Fermilab-SSO-AccessLib/issues"
+Documentation = "https://github.com/normanajn/Fermilab-SSO-AccessLib/blob/main/docs/HOWTO.md"
+
+[project.scripts]
+fermi-sso-probe = "fermi_sso_probe:main"
+fermi-sso-yubikey = "fermi_sso_yubikey:main"
+fermi-sso-cookies = "fermi_sso_cookies:main"
+
+[tool.setuptools]
+py-modules = [
+    "requests_fermi_sso",
+    "fermi_sso_probe",
+    "fermi_sso_yubikey",
+    "fermi_sso_cookies",
+]
+
+[tool.setuptools.dynamic]
+# Resolved statically from the module's AST, so building does not import
+# requests_fermi_sso (and therefore does not need requests installed).
+version = { attr = "requests_fermi_sso.__version__" }
+
+[tool.setuptools.data-files]
+"share/man/man1" = [
+    "man/fermi_sso_probe.1",
+    "man/fermi_sso_cookies.1",
+    "man/bootstrap.sh.1",
+    "man/install-claude-skills.sh.1",
+]
+"share/man/man3" = ["man/FermiSSOSession.3", "man/fermi_sso_yubikey.3"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

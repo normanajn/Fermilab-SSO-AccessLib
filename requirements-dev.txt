@@ -1,5 +1,8 @@
-# Development and test dependencies.
+# Development, test and release dependencies.
 # Install with: pip install -r requirements-dev.txt
 -r requirements.txt
 pytest
-trove-classifiers   # validates setup.py classifiers in tests/test_packaging.py
+trove-classifiers            # validates pyproject classifiers in tests/test_packaging.py
+tomli; python_version < "3.11"   # tests read pyproject.toml; tomllib is stdlib from 3.11
+build                        # python -m build -> dist/*.tar.gz, dist/*.whl
+twine                        # twine check dist/* (README renders on PyPI)

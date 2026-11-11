@@ -1,0 +1,10 @@
+# Extra files for the sdist. The wheel only carries the py-modules, the
+# console scripts, the man pages (data-files) and LICENSE.txt.
+include README.md LICENSE.txt requirements.txt requirements-dev.txt env.example
+include bootstrap.sh install-claude-skills.sh install-claude-skills.ps1
+graft docs
+graft man
+graft examples
+graft claude-skills
+graft tests
+global-exclude __pycache__ *.py[cod] *.cookies *.cookies.* cookies.txt *.pin .env *.env.local

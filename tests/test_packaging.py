@@ -1,69 +1,132 @@
 """
-Checks on setup.py's metadata.
+Checks on pyproject.toml's metadata.
 
 An invalid classifier is only caught at upload time, by twine or PyPI, long
-after the mistake is made; and a python_requires that claims more than the
-code supports lets pip install something that cannot be imported.
+after the mistake is made; a python_requires that claims more than the code
+supports lets pip install something that cannot be imported; and a missing
+data file or entry-point target only fails when the wheel is built or the
+command is run.
 """
 
 import ast
-import io
+import importlib
 import os
+import re
 import sys
 
 import pytest
 
-SETUP_PY = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "setup.py"
-)
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # pragma: no cover - depends on the interpreter
+    tomllib = pytest.importorskip(
+        "tomli", reason="pip install tomli to read pyproject.toml on Python < 3.11"
+    )
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PYPROJECT = os.path.join(ROOT, "pyproject.toml")
 
 
-def setup_kwargs():
-    """The keyword arguments of the setup() call, without executing it."""
-    tree = ast.parse(io.open(SETUP_PY, encoding="utf-8").read())
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Call)
-            and getattr(node.func, "id", None) == "setup"
-        ):
-            kwargs = {}
-            for kw in node.keywords:
-                if kw.arg is None:
-                    continue
-                try:
-                    kwargs[kw.arg] = ast.literal_eval(kw.value)
-                except ValueError:
-                    # computed, e.g. long_description read from README.md
-                    continue
-            return kwargs
-    raise AssertionError("no setup() call found in setup.py")
+@pytest.fixture(scope="module")
+def pyproject():
+    with open(PYPROJECT, "rb") as fh:
+        return tomllib.load(fh)
 
 
-def test_every_classifier_is_registered():
+def floor_of(requires_python):
+    assert requires_python.startswith(">=")
+    major, minor = (int(part) for part in requires_python[2:].split(".")[:2])
+    return major, minor
+
+
+def test_distribution_name(pyproject):
+    """The PyPI name; normalizes to fermi-sso-accesslib."""
+    name = pyproject["project"]["name"]
+    assert re.sub(r"[-_.]+", "-", name).lower() == "fermi-sso-accesslib"
+
+
+def test_every_classifier_is_registered(pyproject):
     trove = pytest.importorskip(
         "trove_classifiers", reason="pip install trove-classifiers to check these"
     )
     unknown = [
-        c for c in setup_kwargs()["classifiers"] if c not in trove.classifiers
+        c for c in pyproject["project"]["classifiers"] if c not in trove.classifiers
     ]
     assert unknown == []
 
 
-def test_python_requires_is_not_below_what_the_code_needs():
+def test_no_license_classifier_alongside_a_license_expression(pyproject):
+    """setuptools >= 77 refuses a License :: classifier when `license` is an
+    SPDX expression (PEP 639)."""
+    assert isinstance(pyproject["project"]["license"], str)
+    assert not [
+        c for c in pyproject["project"]["classifiers"] if c.startswith("License ::")
+    ]
+
+
+def test_license_files_exist(pyproject):
+    for path in pyproject["project"]["license-files"]:
+        assert os.path.isfile(os.path.join(ROOT, path)), path
+
+
+def test_python_requires_is_not_below_what_the_code_needs(pyproject):
     """
     requests_fermi_sso uses the f"{x=}" form, which is 3.8+. Declaring
     anything lower means pip installs a package that fails at import.
     """
-    floor = setup_kwargs()["python_requires"]
-    assert floor.startswith(">=")
-    major, minor = (int(part) for part in floor[2:].split(".")[:2])
-    assert (major, minor) >= (3, 8)
+    assert floor_of(pyproject["project"]["requires-python"]) >= (3, 8)
 
 
-def test_the_running_interpreter_satisfies_python_requires():
-    floor = setup_kwargs()["python_requires"]
-    major, minor = (int(part) for part in floor[2:].split(".")[:2])
-    assert sys.version_info[:2] >= (major, minor)
+def test_the_running_interpreter_satisfies_python_requires(pyproject):
+    floor = floor_of(pyproject["project"]["requires-python"])
+    assert sys.version_info[:2] >= floor
+
+
+def test_python_classifiers_match_requires_python(pyproject):
+    floor = floor_of(pyproject["project"]["requires-python"])
+    listed = [
+        tuple(int(p) for p in c.rsplit(":: ", 1)[1].split("."))
+        for c in pyproject["project"]["classifiers"]
+        if re.match(r"Programming Language :: Python :: 3\.\d+$", c)
+    ]
+    assert listed
+    assert min(listed) == floor
+
+
+def test_every_py_module_exists(pyproject):
+    for mod in pyproject["tool"]["setuptools"]["py-modules"]:
+        assert os.path.isfile(os.path.join(ROOT, mod + ".py")), mod
+
+
+def test_every_console_script_target_exists(pyproject):
+    for script, target in pyproject["project"]["scripts"].items():
+        module_name, func = target.split(":")
+        assert module_name in pyproject["tool"]["setuptools"]["py-modules"], script
+        module = importlib.import_module(module_name)
+        assert callable(getattr(module, func, None)), target
+
+
+def test_every_man_page_is_shipped(pyproject):
+    """Each page under man/ is listed in data-files, and each listed page
+    exists; a missing one fails the wheel build."""
+    listed = [
+        path
+        for paths in pyproject["tool"]["setuptools"]["data-files"].values()
+        for path in paths
+    ]
+    for path in listed:
+        assert os.path.isfile(os.path.join(ROOT, path)), path
+    on_disk = sorted(
+        "man/" + f for f in os.listdir(os.path.join(ROOT, "man")) if not f.startswith(".")
+    )
+    assert sorted(listed) == on_disk
+
+
+def test_man_pages_go_to_the_section_their_suffix_names(pyproject):
+    for target, paths in pyproject["tool"]["setuptools"]["data-files"].items():
+        section = target.rsplit("man", 1)[1]
+        for path in paths:
+            assert path.rsplit(".", 1)[1] == section, (target, path)
 
 
 # --------------------------------------------------------------------------
@@ -98,22 +161,42 @@ def test_every_module_reports_the_same_version():
     assert len(set(versions.values())) == 1, versions
 
 
-def test_setup_py_reports_the_library_version():
-    import importlib.util
-    import subprocess
-
+def test_version_is_statically_resolvable(pyproject):
+    """
+    The build reads the version with `attr = requests_fermi_sso.__version__`.
+    setuptools resolves that from the AST when the assignment is a plain
+    string literal; otherwise it imports the module, which needs requests in
+    the isolated build environment and fails.
+    """
     import requests_fermi_sso
 
-    # A modern venv has no setuptools: pip only installs it inside its
-    # isolated build environment, so setup.py cannot run here directly.
-    if importlib.util.find_spec("setuptools") is None:
-        pytest.skip("setuptools is not installed in this interpreter")
+    attr = pyproject["tool"]["setuptools"]["dynamic"]["version"]["attr"]
+    module_name, name = attr.rsplit(".", 1)
+    with open(os.path.join(ROOT, module_name + ".py"), encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    literal = [
+        node.value.value
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and [getattr(t, "id", None) for t in node.targets] == [name]
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    ]
+    assert literal == [requests_fermi_sso.__version__]
 
-    proc = subprocess.run(
-        [sys.executable, SETUP_PY, "--version"],
-        capture_output=True,
-        text=True,
-        cwd=os.path.dirname(SETUP_PY),
-    )
-    assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip().splitlines()[-1] == requests_fermi_sso.__version__
+
+def test_version_is_major_minor_patch():
+    import requests_fermi_sso
+
+    assert re.fullmatch(r"\d+\.\d+\.\d+", requests_fermi_sso.__version__)
+
+
+def test_man_page_headers_carry_the_library_version():
+    import requests_fermi_sso
+
+    version = requests_fermi_sso.__version__
+    for name in os.listdir(os.path.join(ROOT, "man")):
+        with open(os.path.join(ROOT, "man", name), encoding="utf-8") as fh:
+            first = fh.readline()
+        assert first.startswith(".TH"), name
+        assert version in first, (name, first)
