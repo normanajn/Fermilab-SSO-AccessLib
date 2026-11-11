@@ -1,4 +1,3 @@
-
 ## Fermi SSO signon for Scripts
 
 This is a Session subclass for the Python requests library that will let scripts sign into Fermilab SSO with a user name and password, with a Kerberos ticket, with a YubiKey's PIV certificate, or with cookies saved from an earlier login.
@@ -11,12 +10,15 @@ Alternatively the cookies from one successful login (including a browser login t
 ### Install
 
 ```
-pip install .                # password and cookie-jar modes: requests only
-pip install '.[kerberos]'    # adds requests-gssapi for --auth kerberos
+pip install fermi-sso-accesslib               # password and cookie-jar modes: requests only
+pip install 'fermi-sso-accesslib[kerberos]'   # adds requests-gssapi for --auth kerberos
 ```
 
+The PyPI distribution is `Fermi-SSO-AccessLib`; the import name is
+`requests_fermi_sso`. From a checkout, `pip install .` / `pip install '.[kerberos]'`.
+
 The YubiKey mode needs system tools (OpenSSL 3, the pkcs11 engine, a PKCS#11
-module); see [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md).
+module); see [docs/DEPENDENCIES.md](https://github.com/normanajn/Fermilab-SSO-AccessLib/blob/main/docs/DEPENDENCIES.md).
 
 This also installs the `fermi-sso-probe` and `fermi-sso-cookies` commands. For development:
 
@@ -46,7 +48,7 @@ With a `kinit` ticket no password is needed. Install the optional dependency
 and pick the method:
 
 ```
-pip install '.[kerberos]'
+pip install 'fermi-sso-accesslib[kerberos]'
 fermi-sso-probe -a kerberos -c ~/.fermi_sso.cookies
 ```
 
@@ -173,15 +175,16 @@ See `man ./man/install-claude-skills.sh.1`.
 
 ### Documentation
 
-- [docs/EXAMPLES.md](docs/EXAMPLES.md) — copy-paste recipes for DocDB, the shift scheduler, Mu2eTalks, ServiceNow, Kerberos, the YubiKey, and CILogon device codes
-- [docs/HOWTO.md](docs/HOWTO.md) — install, credentials, troubleshooting
-- [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) — external dependencies per authentication method, with install commands per platform
+- [docs/EXAMPLES.md](https://github.com/normanajn/Fermilab-SSO-AccessLib/blob/main/docs/EXAMPLES.md) — copy-paste recipes for DocDB, the shift scheduler, Mu2eTalks, ServiceNow, Kerberos, the YubiKey, and CILogon device codes
+- [docs/HOWTO.md](https://github.com/normanajn/Fermilab-SSO-AccessLib/blob/main/docs/HOWTO.md) — install, credentials, troubleshooting
+- [docs/DEPENDENCIES.md](https://github.com/normanajn/Fermilab-SSO-AccessLib/blob/main/docs/DEPENDENCIES.md) — external dependencies per authentication method, with install commands per platform
 - `examples/` — small hand-run scripts; start with `check_cdcvs_login.py`
 - `man ./man/bootstrap.sh.1` — the bootstrap script
 - `man ./man/install-claude-skills.sh.1` — the Claude Code skills installer
 - `man ./man/fermi_sso_probe.1` — the probe utility
 - `man ./man/fermi_sso_cookies.1` — the cookie jar inspector
 - `man ./man/FermiSSOSession.3` — the library API
+- [docs/RELEASING.md](https://github.com/normanajn/Fermilab-SSO-AccessLib/blob/main/docs/RELEASING.md) — building and publishing to PyPI
 
 ### Tests
 

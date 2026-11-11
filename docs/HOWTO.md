@@ -1,6 +1,6 @@
 # HOWTO: Authenticating to Fermilab SSO from a Script
 
-This guide covers installing `requests-fermi-sso`, supplying credentials,
+This guide covers installing `Fermi-SSO-AccessLib`, supplying credentials,
 verifying a login with the `fermi_sso_probe` utility, and using the session
 in your own code.
 
@@ -54,11 +54,23 @@ password](#reusing-cookies-instead-of-a-password).
 External dependencies for each authentication method, with install commands
 for macOS and Linux, are listed in [DEPENDENCIES.md](DEPENDENCIES.md).
 
-Requires Python 3.6+ and `requests`.
+Requires Python 3.9+ and `requests`.
+
+From PyPI (the distribution is `Fermi-SSO-AccessLib`; pip also accepts the
+normalized `fermi-sso-accesslib`):
+
+```bash
+python3 -m venv venv
+source venv/bin/activate          # Windows: venv\Scripts\activate
+pip install fermi-sso-accesslib
+pip install 'fermi-sso-accesslib[kerberos]'   # + requests-gssapi
+```
+
+From a checkout:
 
 ```bash
 git clone <this repo>
-cd requests-fermi-sso
+cd Fermilab-SSO-AccessLib
 
 python3 -m venv venv
 source venv/bin/activate          # Windows: venv\Scripts\activate
@@ -75,8 +87,15 @@ Installing also puts the `fermi-sso-probe` command on your `PATH`.
 
 ### Manual pages
 
-The manpages are not installed by `pip` in a virtualenv. To read them from
-the source tree:
+`pip install` puts the manpages under `<prefix>/share/man` (in a virtualenv,
+`$VIRTUAL_ENV/share/man`), which `man` does not search by default:
+
+```bash
+man -M "$VIRTUAL_ENV/share/man" fermi_sso_probe
+man -M "$VIRTUAL_ENV/share/man" 3 FermiSSOSession
+```
+
+To read them from the source tree:
 
 ```bash
 man ./man/fermi_sso_probe.1     # the probe utility
@@ -210,7 +229,7 @@ the library selects whichever of those the choose page lists and lets
 ticket cache. No username or password is involved.
 
 ```bash
-pip install 'requests-fermi_sso[kerberos]'     # adds requests-gssapi
+pip install 'fermi-sso-accesslib[kerberos]'     # adds requests-gssapi
 kinit
 fermi-sso-probe -a kerberos -c ~/.fermi_sso.cookies
 ```

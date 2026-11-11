@@ -12,7 +12,7 @@ from html.parser import HTMLParser
 from typing import Dict, Iterable, List, NamedTuple, Optional, Tuple
 from urllib.parse import urlencode, urljoin, urlsplit
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 logger = logging.getLogger(__name__)
 
@@ -1051,7 +1051,7 @@ def _default_spnego_auth():
     except ImportError as exc:  # pragma: no cover - depends on the environment
         raise ImportError(
             "auth_method='kerberos' needs the requests-gssapi package: "
-            "pip install 'requests-fermi_sso[kerberos]'"
+            "pip install 'fermi-sso-accesslib[kerberos]'"
         ) from exc
     return HTTPSPNEGOAuth(mutual_authentication=OPTIONAL, opportunistic_auth=False)
 
